@@ -1164,13 +1164,25 @@ fn handle_doctor(root: &str, state_dir: &str) -> Result<i32> {
         }
     }
 
+    let has_desktop_mappings = read_desktop_mapping_store()
+        .map(|s| !s.mappings.is_empty())
+        .unwrap_or(false);
+    if has_desktop_mappings {
+        println!();
+        let (desktop_partial, _) = run_desktop_doctor_checks(false, false)?;
+        if desktop_partial {
+            partial = true;
+        }
+    }
+
     println!();
     println!("Hints");
     if env::var("SUDO_USER").is_ok() {
         println!("OK  sudo session detected");
     } else {
         println!("WARN user daemon reload may be required in active session");
-        println!("     run: systemctl --user daemon-reload");
+        println!("fix: systemctl --user daemon-reload");
+        println!("fix: logout/login");
         partial = true;
     }
 
@@ -1866,8 +1878,30 @@ fn handle_desktop_unwrap(desktop_id: &str, class: &str) -> Result<i32> {
     }
 }
 
-fn handle_desktop_doctor() -> Result<i32> {
-    println!("command=desktop doctor");
+fn validate_wrapper_file(path: &Path) -> Result<()> {
+    let content = fs::read_to_string(path)
+        .with_context(|| format!("failed to read wrapper {}", path.display()))?;
+    let fields = parse_desktop_entry(&content);
+    if fields.is_empty() {
+        return Err(anyhow!("missing [Desktop Entry] group"));
+    }
+    let exec = fields
+        .get("Exec")
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("Exec missing"))?;
+    if !exec.starts_with("resguard run --class ") || !exec.contains(" -- ") {
+        return Err(anyhow!(
+            "Exec is not a resguard wrapper command: expected 'resguard run --class <class> -- ...'"
+        ));
+    }
+    Ok(())
+}
+
+fn run_desktop_doctor_checks(print_command: bool, require_mapping: bool) -> Result<(bool, bool)> {
+    if print_command {
+        println!("command=desktop doctor");
+    }
     let mut partial = false;
 
     println!("Desktop checks");
@@ -1875,15 +1909,21 @@ fn handle_desktop_doctor() -> Result<i32> {
         println!("OK  resguard found in PATH");
     } else {
         println!("WARN resguard not found in PATH");
+        println!("fix: export PATH=\"$HOME/.local/bin:$PATH\"");
         partial = true;
     }
 
     let store = read_desktop_mapping_store()?;
     if store.mappings.is_empty() {
-        println!("WARN no desktop wrappers in mapping store");
-        println!("hint=create one with: resguard desktop wrap <desktop_id> --class <class>");
-        return Ok(1);
+        if require_mapping {
+            println!("WARN no desktop wrappers in mapping store");
+            println!("fix: resguard desktop wrap <desktop_id> --class <class>");
+            return Ok((true, false));
+        }
+        println!("INFO no desktop wrappers in mapping store; skipping desktop checks");
+        return Ok((false, false));
     }
+    let has_mappings = true;
 
     println!(
         "OK  mapping store loaded ({} desktop ids)",
@@ -1895,11 +1935,31 @@ fn handle_desktop_doctor() -> Result<i32> {
         for (class, entry) in by_class {
             let wrapper_path = PathBuf::from(&entry.wrapper_path);
             if wrapper_path.exists() {
-                println!("OK  wrapper exists: {} [{}]", desktop_id, class);
+                match validate_wrapper_file(&wrapper_path) {
+                    Ok(()) => println!(
+                        "OK  wrapper exists and is parseable: {} [{}]",
+                        desktop_id, class
+                    ),
+                    Err(err) => {
+                        println!(
+                            "WARN wrapper invalid: {} [{}] at {} ({})",
+                            desktop_id, class, entry.wrapper_path, err
+                        );
+                        println!(
+                            "fix: resguard desktop wrap {} --class {} --force",
+                            desktop_id, class
+                        );
+                        partial = true;
+                    }
+                }
             } else {
                 println!(
                     "WARN wrapper missing: {} [{}] at {}",
                     desktop_id, class, entry.wrapper_path
+                );
+                println!(
+                    "fix: resguard desktop wrap {} --class {}",
+                    desktop_id, class
                 );
                 partial = true;
             }
@@ -1912,9 +1972,7 @@ fn handle_desktop_doctor() -> Result<i32> {
                         "WARN user slice missing or user daemon unavailable: {}",
                         slice
                     );
-                    println!(
-                        "hint=apply profile and reload user daemon: sudo resguard apply <profile> --user-daemon-reload"
-                    );
+                    println!("fix: sudo resguard apply <profile> --user-daemon-reload");
                     partial = true;
                     needs_user_reload_hint = true;
                 }
@@ -1924,9 +1982,16 @@ fn handle_desktop_doctor() -> Result<i32> {
 
     if needs_user_reload_hint {
         println!("Hints");
-        println!("WARN run in your desktop session: systemctl --user daemon-reload");
+        println!("WARN user daemon reload may be required");
+        println!("fix: systemctl --user daemon-reload");
+        println!("fix: loginctl terminate-user \"$USER\"   # or logout/login");
     }
 
+    Ok((partial, has_mappings))
+}
+
+fn handle_desktop_doctor() -> Result<i32> {
+    let (partial, _) = run_desktop_doctor_checks(true, true)?;
     Ok(if partial { 1 } else { 0 })
 }
 

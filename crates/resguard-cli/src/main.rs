@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+use regex::Regex;
 use resguard_config::{load_profile_from_store, profile_path, save_profile, validate_profile_file};
 use resguard_core::profile::{
     Class, Cpu, Memory, Metadata, Oomd, Profile, Spec, SystemMemory, UserMemory,
@@ -15,11 +16,13 @@ use resguard_system::{
     read_pressure_1min, systemctl_cat_unit, systemctl_is_active, systemctl_show_props, systemd_run,
     write_file,
 };
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 use std::time::Duration;
+use std::{collections::HashMap, fs};
 
 #[derive(Parser, Debug)]
 #[command(name = "resguard", about = "Linux resource guard using systemd slices")]
@@ -139,7 +142,12 @@ enum ProfileCmd {
 
 #[derive(Subcommand, Debug)]
 enum DesktopCmd {
-    List,
+    List {
+        #[arg(long)]
+        filter: Option<String>,
+        #[arg(long, value_enum, default_value_t = DesktopOrigin::All)]
+        origin: DesktopOrigin,
+    },
     Wrap {
         desktop_id: String,
         #[arg(long)]
@@ -149,6 +157,13 @@ enum DesktopCmd {
         desktop_id: String,
     },
     Doctor,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+enum DesktopOrigin {
+    User,
+    System,
+    All,
 }
 
 #[derive(Debug)]
@@ -1311,6 +1326,201 @@ fn handle_metrics() -> Result<i32> {
     Ok(if partial { 1 } else { 0 })
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct DesktopListItem {
+    desktop_id: String,
+    name: String,
+    exec: String,
+    icon: Option<String>,
+    try_exec: Option<String>,
+    terminal: Option<String>,
+    entry_type: Option<String>,
+    path: String,
+    origin: String,
+    fields: BTreeMap<String, String>,
+}
+
+fn parse_desktop_entry(s: &str) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    let mut in_entry = false;
+    for line in s.lines() {
+        let line = line.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            in_entry = line == "[Desktop Entry]";
+            continue;
+        }
+        if !in_entry || line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once('=') {
+            map.insert(k.trim().to_string(), v.trim().to_string());
+        }
+    }
+    map
+}
+
+fn short_exec(exec: &str) -> String {
+    let max = 80usize;
+    if exec.chars().count() <= max {
+        return exec.to_string();
+    }
+    exec.chars().take(max - 3).collect::<String>() + "..."
+}
+
+fn desktop_scan_dirs() -> Vec<(PathBuf, DesktopOrigin)> {
+    let mut dirs = Vec::new();
+    if let Some(home) = env::var_os("HOME") {
+        dirs.push((
+            PathBuf::from(home).join(".local/share/applications"),
+            DesktopOrigin::User,
+        ));
+    }
+    dirs.push((
+        PathBuf::from("/usr/local/share/applications"),
+        DesktopOrigin::System,
+    ));
+    dirs.push((
+        PathBuf::from("/usr/share/applications"),
+        DesktopOrigin::System,
+    ));
+    dirs
+}
+
+fn origin_matches(filter: DesktopOrigin, item_origin: DesktopOrigin) -> bool {
+    match filter {
+        DesktopOrigin::All => true,
+        DesktopOrigin::User => item_origin == DesktopOrigin::User,
+        DesktopOrigin::System => item_origin == DesktopOrigin::System,
+    }
+}
+
+fn discover_desktop_entries(
+    origin_filter: DesktopOrigin,
+    name_filter: Option<&Regex>,
+) -> Result<Vec<DesktopListItem>> {
+    let mut items = Vec::new();
+
+    for (dir, origin) in desktop_scan_dirs() {
+        if !origin_matches(origin_filter, origin) || !dir.exists() {
+            continue;
+        }
+        let entries = match fs::read_dir(&dir) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
+                continue;
+            }
+
+            let content = match fs::read_to_string(&path) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let map = parse_desktop_entry(&content);
+            if map.is_empty() {
+                continue;
+            }
+
+            if let Some(t) = map.get("Type") {
+                if t != "Application" {
+                    continue;
+                }
+            }
+
+            let desktop_id = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default()
+                .to_string();
+            let name = map.get("Name").cloned().unwrap_or_default();
+            let exec = map.get("Exec").cloned().unwrap_or_default();
+
+            if let Some(re) = name_filter {
+                let hay = format!("{desktop_id} {name} {exec}");
+                if !re.is_match(&hay) {
+                    continue;
+                }
+            }
+
+            let mut fields = BTreeMap::new();
+            for (k, v) in map {
+                fields.insert(k, v);
+            }
+
+            items.push(DesktopListItem {
+                desktop_id,
+                name,
+                exec,
+                icon: fields.get("Icon").cloned(),
+                try_exec: fields.get("TryExec").cloned(),
+                terminal: fields.get("Terminal").cloned(),
+                entry_type: fields.get("Type").cloned(),
+                path: path.display().to_string(),
+                origin: match origin {
+                    DesktopOrigin::User => "user".to_string(),
+                    DesktopOrigin::System => "system".to_string(),
+                    DesktopOrigin::All => "all".to_string(),
+                },
+                fields,
+            });
+        }
+    }
+
+    items.sort_by(|a, b| {
+        a.desktop_id
+            .cmp(&b.desktop_id)
+            .then(a.origin.cmp(&b.origin))
+    });
+    Ok(items)
+}
+
+fn print_desktop_table(items: &[DesktopListItem]) {
+    println!("desktop_id\tname\texec\torigin");
+    for item in items {
+        println!(
+            "{}\t{}\t{}\t{}",
+            item.desktop_id,
+            if item.name.is_empty() {
+                "-"
+            } else {
+                &item.name
+            },
+            short_exec(&item.exec),
+            item.origin
+        );
+    }
+}
+
+fn handle_desktop_list(format: &str, filter: Option<String>, origin: DesktopOrigin) -> Result<i32> {
+    println!("command=desktop list");
+
+    let regex = if let Some(pat) = filter {
+        Some(Regex::new(&pat).map_err(|err| anyhow!("invalid --filter regex: {}", err))?)
+    } else {
+        None
+    };
+
+    let items = discover_desktop_entries(origin, regex.as_ref())?;
+
+    match format {
+        "json" => println!("{}", serde_json::to_string_pretty(&items)?),
+        "yaml" => println!("{}", serde_yaml::to_string(&items)?),
+        _ => print_desktop_table(&items),
+    }
+
+    Ok(0)
+}
+
 fn parse_duration_arg(input: &str) -> Result<Duration> {
     let s = input.trim();
     if s.is_empty() {
@@ -1412,6 +1622,7 @@ fn handle_panic(root: &str, duration: Option<String>) -> Result<i32> {
 fn main() {
     let cli = Cli::parse();
     print_global_context(&cli);
+    let format = cli.format.clone();
     let root = cli.root.clone();
     let config_dir = cli.config_dir.clone();
     let state_dir = cli.state_dir.clone();
@@ -1626,10 +1837,14 @@ fn main() {
             }
         },
         Commands::Desktop { cmd } => match cmd {
-            DesktopCmd::List => {
-                println!("command=desktop list");
-                println!("status=stub");
-                0
+            DesktopCmd::List { filter, origin } => {
+                match handle_desktop_list(&format, filter, origin) {
+                    Ok(code) => code,
+                    Err(err) => {
+                        eprintln!("desktop list failed: {err}");
+                        1
+                    }
+                }
             }
             DesktopCmd::Wrap { desktop_id, class } => {
                 println!("command=desktop wrap");

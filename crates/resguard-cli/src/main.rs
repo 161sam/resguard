@@ -169,23 +169,53 @@ fn clamp(value: u64, min: u64, max: u64) -> u64 {
     value.max(min).min(max)
 }
 
-fn class_memory_max(user_max: u64, pct: u64) -> String {
+fn round_down_to_step(value: u64, step: u64) -> u64 {
+    if step == 0 {
+        return value;
+    }
+    (value / step) * step
+}
+
+fn round_up_to_step(value: u64, step: u64) -> u64 {
+    if step == 0 {
+        return value;
+    }
+    value.div_ceil(step) * step
+}
+
+fn reserve_rounding_step(reserve: u64) -> u64 {
+    let gb = 1024_u64.pow(3);
+    let mib_256 = 256 * 1024_u64.pow(2);
+    if reserve >= 2 * gb {
+        gb
+    } else {
+        mib_256
+    }
+}
+
+fn class_cap_percent(user_max: u64, pct: u64, hard_cap: u64) -> u64 {
     let gb = 1024_u64.pow(3);
     let raw = user_max.saturating_mul(pct) / 100;
-    format_bytes_binary(clamp(raw, gb, user_max.max(gb)))
+    let rounded = round_up_to_step(raw, gb);
+    clamp(rounded, gb.min(user_max), hard_cap.min(user_max))
 }
 
 fn build_auto_profile(name: &str, total_mem_bytes: u64, cpu_cores: u32) -> Profile {
     let gb = 1024_u64.pow(3);
-    let reserve = default_reserve_bytes(total_mem_bytes).min(total_mem_bytes);
+    let base_reserve = default_reserve_bytes(total_mem_bytes).min(total_mem_bytes);
+    let reserve_step = reserve_rounding_step(base_reserve);
+    let reserve = round_up_to_step(base_reserve, reserve_step).min(total_mem_bytes);
 
-    let mut user_max = total_mem_bytes.saturating_sub(reserve);
+    let mut user_max = round_down_to_step(total_mem_bytes.saturating_sub(reserve), gb);
     if user_max == 0 {
-        user_max = total_mem_bytes;
+        user_max = round_down_to_step(total_mem_bytes, 256 * 1024_u64.pow(2));
     }
 
     let high_margin = (user_max / 10).min(2 * gb);
-    let user_high = user_max.saturating_sub(high_margin);
+    let mut user_high = round_down_to_step(user_max.saturating_sub(high_margin), gb);
+    if user_high == 0 {
+        user_high = user_max;
+    }
 
     let (cpu, oomd) = if cpu_cores >= 4 {
         (
@@ -217,13 +247,29 @@ fn build_auto_profile(name: &str, total_mem_bytes: u64, cpu_cores: u32) -> Profi
         )
     };
 
+    let browsers_max = class_cap_percent(user_max, 40, 6 * gb);
+    let ide_max = class_cap_percent(user_max, 25, 4 * gb);
+    let heavy_rest = user_max.saturating_sub(browsers_max.saturating_add(ide_max));
+    let heavy_max = if heavy_rest == 0 {
+        gb.min(user_max)
+    } else {
+        let rounded = round_down_to_step(heavy_rest, gb);
+        if rounded == 0 {
+            round_down_to_step(heavy_rest, 256 * 1024_u64.pow(2))
+        } else {
+            rounded
+        }
+    }
+    .min(8 * gb)
+    .min(user_max);
+
     let mut classes = BTreeMap::new();
     classes.insert(
         "browsers".to_string(),
         Class {
             slice_name: Some("resguard-browsers.slice".to_string()),
             memory_high: None,
-            memory_max: Some(class_memory_max(user_max, 40)),
+            memory_max: Some(format_bytes_binary(browsers_max)),
             cpu_weight: Some(80),
             oomd_memory_pressure: Some("kill".to_string()),
             oomd_memory_pressure_limit: Some("55%".to_string()),
@@ -234,7 +280,7 @@ fn build_auto_profile(name: &str, total_mem_bytes: u64, cpu_cores: u32) -> Profi
         Class {
             slice_name: Some("resguard-ide.slice".to_string()),
             memory_high: None,
-            memory_max: Some(class_memory_max(user_max, 30)),
+            memory_max: Some(format_bytes_binary(ide_max)),
             cpu_weight: Some(70),
             oomd_memory_pressure: Some("kill".to_string()),
             oomd_memory_pressure_limit: Some("60%".to_string()),
@@ -245,7 +291,7 @@ fn build_auto_profile(name: &str, total_mem_bytes: u64, cpu_cores: u32) -> Profi
         Class {
             slice_name: Some("resguard-heavy.slice".to_string()),
             memory_high: None,
-            memory_max: Some(class_memory_max(user_max, 60)),
+            memory_max: Some(format_bytes_binary(heavy_max)),
             cpu_weight: Some(90),
             oomd_memory_pressure: Some("kill".to_string()),
             oomd_memory_pressure_limit: Some("50%".to_string()),

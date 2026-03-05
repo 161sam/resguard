@@ -132,11 +132,13 @@ Ziel:
   - /usr/share/applications
   - /usr/local/share/applications
   - ~/.local/share/applications
+  - plus `$XDG_DATA_HOME` and `$XDG_DATA_DIRS` lookup rules (see `docs/desktop.md`)
 
 ### Issue #24 — `resguard desktop wrap`
 - create wrapper desktop entry in ~/.local/share/applications/
 - Exec becomes: `resguard run --class <class> -- <original exec> %u`
 - handle TryExec/Icon/Name suffix, unique desktop-id
+ - preserve `%u/%U/%f/%F` placeholder semantics (no shell wrapping)
 
 ### Issue #25 — `resguard desktop unwrap`
 - remove wrapper entry
@@ -146,6 +148,7 @@ Ziel:
 - detect duplicates
 - check resguard in PATH
 - check user slices exist
+ - verify wrapper markers (`X-Resguard-Managed`, source id, class)
 
 ### Issue #27 — Rules mapping (optional)
 - persist mapping desktop-id -> class

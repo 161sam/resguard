@@ -97,6 +97,10 @@ enum Commands {
         #[command(subcommand)]
         cmd: ProfileCmd,
     },
+    Desktop {
+        #[command(subcommand)]
+        cmd: DesktopCmd,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -124,6 +128,20 @@ enum ProfileCmd {
     Edit {
         name: String,
     },
+}
+
+#[derive(Subcommand, Debug)]
+enum DesktopCmd {
+    List,
+    Wrap {
+        desktop_id: String,
+        #[arg(long)]
+        class: String,
+    },
+    Unwrap {
+        desktop_id: String,
+    },
+    Doctor,
 }
 
 #[derive(Debug)]
@@ -1227,6 +1245,30 @@ fn main() {
             ProfileCmd::Edit { name } => {
                 println!("command=profile edit");
                 println!("name={name}");
+                0
+            }
+        },
+        Commands::Desktop { cmd } => match cmd {
+            DesktopCmd::List => {
+                println!("command=desktop list");
+                println!("status=stub");
+                0
+            }
+            DesktopCmd::Wrap { desktop_id, class } => {
+                println!("command=desktop wrap");
+                println!("desktop_id={} class={}", desktop_id, class);
+                println!("status=stub");
+                0
+            }
+            DesktopCmd::Unwrap { desktop_id } => {
+                println!("command=desktop unwrap");
+                println!("desktop_id={}", desktop_id);
+                println!("status=stub");
+                0
+            }
+            DesktopCmd::Doctor => {
+                println!("command=desktop doctor");
+                println!("status=stub");
                 0
             }
         },

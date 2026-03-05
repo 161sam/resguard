@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use regex::Regex;
 use resguard_config::{load_profile_from_store, profile_path, save_profile, validate_profile_file};
 use resguard_core::profile::{
-    Class, Cpu, Memory, Metadata, Oomd, Profile, Spec, SystemMemory, UserMemory,
+    Class, Cpu, Memory, Metadata, Oomd, Profile, Spec, SuggestRule, SystemMemory, UserMemory,
 };
 use resguard_core::{build_apply_plan, validate_profile, Action, PlanOptions};
 use resguard_state::{
@@ -89,6 +89,12 @@ enum Commands {
         duration: Option<String>,
     },
     Status,
+    Suggest {
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(long)]
+        apply: bool,
+    },
     Run {
         #[arg(long)]
         class: String,
@@ -188,6 +194,18 @@ struct RunRequest {
     no_check: bool,
     wait: bool,
     command: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct Suggestion {
+    scope: String,
+    class: String,
+    reason: String,
+    slice: String,
+    exec_start: String,
+    memory_current: u64,
+    cpu_usage_nsec: u64,
+    desktop_id: Option<String>,
 }
 
 fn print_global_context(cli: &Cli) {
@@ -362,6 +380,7 @@ fn build_auto_profile(name: &str, total_mem_bytes: u64, cpu_cores: u32) -> Profi
             oomd,
             classes,
             slices: None,
+            suggest: None,
         },
     }
 }
@@ -924,6 +943,334 @@ fn handle_run(root: &str, config_dir: &str, state_dir: &str, req: RunRequest) ->
     } else {
         Ok(6)
     }
+}
+
+fn systemctl_user_scope_units() -> Result<Vec<String>> {
+    let out = Command::new("systemctl")
+        .args([
+            "--user",
+            "list-units",
+            "--type=scope",
+            "--all",
+            "--no-legend",
+            "--no-pager",
+        ])
+        .output()?;
+    if !out.status.success() {
+        return Err(anyhow!(
+            "systemctl --user list-units failed with status {}",
+            out.status
+        ));
+    }
+
+    let mut scopes = Vec::new();
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        let unit = line.split_whitespace().next().unwrap_or_default();
+        if unit.ends_with(".scope") {
+            scopes.push(unit.to_string());
+        }
+    }
+    Ok(scopes)
+}
+
+fn systemctl_user_show_scope(scope: &str) -> Result<BTreeMap<String, String>> {
+    systemctl_show_props(
+        true,
+        scope,
+        &["MemoryCurrent", "CPUUsageNSec", "Slice", "ExecStart", "Id"],
+    )
+}
+
+fn parse_first_exec_token(exec: &str) -> Option<String> {
+    let mut iter = exec.split_whitespace().peekable();
+    while let Some(tok) = iter.next() {
+        if tok == "env" {
+            continue;
+        }
+        if tok.contains('=') && tok.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+            continue;
+        }
+        let cleaned = tok.trim_matches('"').trim_matches('\'');
+        if cleaned.is_empty() {
+            continue;
+        }
+        let base = Path::new(cleaned)
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or(cleaned)
+            .to_string();
+        return Some(base);
+    }
+    None
+}
+
+fn build_desktop_exec_index() -> HashMap<String, String> {
+    let mut map = HashMap::new();
+    if let Ok(entries) = discover_desktop_entries(DesktopOrigin::All, None) {
+        for item in entries {
+            if let Some(bin) = parse_first_exec_token(&item.exec) {
+                map.entry(bin).or_insert(item.desktop_id);
+            }
+        }
+    }
+    map
+}
+
+fn default_suggest_rules() -> Vec<SuggestRule> {
+    vec![
+        SuggestRule {
+            pattern: "(?i)docker|podman|containerd".to_string(),
+            class: "heavy".to_string(),
+        },
+        SuggestRule {
+            pattern: "(?i)code|codium|idea|pycharm|clion|goland".to_string(),
+            class: "ide".to_string(),
+        },
+        SuggestRule {
+            pattern: "(?i)firefox|chrome|chromium|brave|opera|vivaldi".to_string(),
+            class: "browsers".to_string(),
+        },
+    ]
+}
+
+fn classify_scope(
+    unit: &str,
+    slice: &str,
+    exec_start: &str,
+    memory_current: u64,
+    rules: &[SuggestRule],
+) -> Option<(String, String)> {
+    let hay = format!("{unit} {slice} {exec_start}");
+    for rule in rules {
+        if let Ok(re) = Regex::new(&rule.pattern) {
+            if re.is_match(&hay) {
+                return Some((
+                    rule.class.clone(),
+                    format!("matched profile rule /{}/", rule.pattern),
+                ));
+            }
+        }
+    }
+
+    let h = hay.to_ascii_lowercase();
+    if h.contains("docker") || h.contains("podman") {
+        return Some((
+            "heavy".to_string(),
+            "container workload detected".to_string(),
+        ));
+    }
+    if h.contains("code")
+        || h.contains("codium")
+        || h.contains("idea")
+        || h.contains("pycharm")
+        || h.contains("clion")
+    {
+        return Some(("ide".to_string(), "IDE workload detected".to_string()));
+    }
+
+    let gib = 1024_u64.pow(3);
+    if slice == "app.slice" && memory_current >= 2 * gib {
+        if h.contains("firefox")
+            || h.contains("chrome")
+            || h.contains("chromium")
+            || h.contains("brave")
+        {
+            return Some((
+                "browsers".to_string(),
+                "high-memory app.slice browser process".to_string(),
+            ));
+        }
+        return Some((
+            "heavy".to_string(),
+            "high-memory app.slice process".to_string(),
+        ));
+    }
+
+    None
+}
+
+fn resolve_suggest_profile(
+    root: &str,
+    config_dir: &str,
+    state_dir: &str,
+    profile_override: Option<&str>,
+) -> Result<(Option<String>, Option<Profile>)> {
+    let rooted_config_dir = resolve_with_root(root, PathBuf::from(config_dir))?;
+    let rooted_state_dir = resolve_with_root(root, PathBuf::from(state_dir))?;
+
+    let profile_name = if let Some(p) = profile_override {
+        Some(p.to_string())
+    } else {
+        read_state(&rooted_state_dir)
+            .ok()
+            .and_then(|s| s.active_profile)
+    };
+
+    if let Some(name) = profile_name.clone() {
+        let profile = load_profile_from_store(&rooted_config_dir, &name).ok();
+        Ok((Some(name), profile))
+    } else {
+        Ok((None, None))
+    }
+}
+
+fn print_suggestions_table(suggestions: &[Suggestion]) {
+    println!("scope\tclass\tdesktop_id\tmemory\treason");
+    for s in suggestions {
+        println!(
+            "{}\t{}\t{}\t{}\t{}",
+            s.scope,
+            s.class,
+            s.desktop_id.as_deref().unwrap_or("-"),
+            format_bytes_human(s.memory_current),
+            s.reason
+        );
+    }
+}
+
+fn handle_suggest(
+    format: &str,
+    root: &str,
+    config_dir: &str,
+    state_dir: &str,
+    profile: Option<String>,
+    apply: bool,
+) -> Result<i32> {
+    println!("command=suggest");
+    println!("apply={} profile={:?}", apply, profile);
+
+    let (resolved_profile_name, resolved_profile) =
+        resolve_suggest_profile(root, config_dir, state_dir, profile.as_deref())?;
+    if let Some(name) = &resolved_profile_name {
+        println!("profile_source={name}");
+    } else {
+        println!("profile_source=none (using built-in rules only)");
+    }
+
+    let mut rules = Vec::new();
+    if let Some(p) = &resolved_profile {
+        if let Some(cfg) = &p.spec.suggest {
+            for r in &cfg.rules {
+                rules.push(r.clone());
+            }
+        }
+    }
+    rules.extend(default_suggest_rules());
+
+    let desktop_by_exec = build_desktop_exec_index();
+    let scopes = match systemctl_user_scope_units() {
+        Ok(v) => v,
+        Err(err) => {
+            eprintln!("warn: could not query user scopes: {err}");
+            return Ok(1);
+        }
+    };
+
+    let mut suggestions = Vec::new();
+    for scope in scopes {
+        let props = match systemctl_user_show_scope(&scope) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        let exec_start = props.get("ExecStart").cloned().unwrap_or_default();
+        let slice = props
+            .get("Slice")
+            .cloned()
+            .unwrap_or_else(|| "-".to_string());
+        let memory_current = props
+            .get("MemoryCurrent")
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+        let cpu_usage_nsec = props
+            .get("CPUUsageNSec")
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+
+        let Some((class, reason)) =
+            classify_scope(&scope, &slice, &exec_start, memory_current, &rules)
+        else {
+            continue;
+        };
+
+        let desktop_id =
+            parse_first_exec_token(&exec_start).and_then(|bin| desktop_by_exec.get(&bin).cloned());
+
+        suggestions.push(Suggestion {
+            scope,
+            class,
+            reason,
+            slice,
+            exec_start,
+            memory_current,
+            cpu_usage_nsec,
+            desktop_id,
+        });
+    }
+
+    suggestions.sort_by(|a, b| {
+        b.memory_current
+            .cmp(&a.memory_current)
+            .then(a.scope.cmp(&b.scope))
+    });
+    suggestions.dedup_by(|a, b| a.scope == b.scope && a.class == b.class);
+
+    if suggestions.is_empty() {
+        println!("result=no-suggestions");
+        println!("hint=run workload, then retry: resguard suggest");
+        return Ok(0);
+    }
+
+    match format {
+        "json" => println!("{}", serde_json::to_string_pretty(&suggestions)?),
+        "yaml" => println!("{}", serde_yaml::to_string(&suggestions)?),
+        _ => print_suggestions_table(&suggestions),
+    }
+
+    if apply {
+        println!();
+        println!("apply_results");
+        for s in &suggestions {
+            if let Some(desktop_id) = &s.desktop_id {
+                let wrapper_path = wrapper_path_for(desktop_id, &s.class)?;
+                if wrapper_path.exists() {
+                    println!(
+                        "skip\t{}\t{}\talready wrapped ({})",
+                        desktop_id,
+                        s.class,
+                        wrapper_path.display()
+                    );
+                    continue;
+                }
+
+                match handle_desktop_wrap(desktop_id, &s.class, false) {
+                    Ok(0) => println!("ok\t{}\t{}\twrapped", desktop_id, s.class),
+                    Ok(code) => {
+                        println!("warn\t{}\t{}\twrap returned {}", desktop_id, s.class, code)
+                    }
+                    Err(err) => println!("warn\t{}\t{}\t{}", desktop_id, s.class, err),
+                }
+            } else {
+                let profile_hint = resolved_profile_name.as_deref().unwrap_or("<profile>");
+                println!(
+                    "hint\t{}\t{}\tno desktop_id match; wrap manually: resguard desktop list --filter '{}' && resguard desktop wrap <desktop_id> --class {} (then sudo resguard apply {} --user-daemon-reload)",
+                    s.scope,
+                    s.class,
+                    parse_first_exec_token(&s.exec_start).unwrap_or_else(|| s.scope.clone()),
+                    s.class,
+                    profile_hint
+                );
+            }
+        }
+    } else {
+        println!();
+        println!("next_steps");
+        println!("1) review suggestions above");
+        println!("2) auto-wrap known desktop entries: resguard suggest --apply");
+        println!("3) apply profile so user slices exist: sudo resguard apply <profile> --user-daemon-reload");
+    }
+
+    Ok(0)
 }
 
 fn status_value(props: &BTreeMap<String, String>, key: &str) -> String {
@@ -2208,6 +2555,15 @@ fn main() {
                 1
             }
         },
+        Commands::Suggest { profile, apply } => {
+            match handle_suggest(&format, &root, &config_dir, &state_dir, profile, apply) {
+                Ok(code) => code,
+                Err(err) => {
+                    eprintln!("suggest failed: {err}");
+                    1
+                }
+            }
+        }
         Commands::Run {
             class,
             profile,
@@ -2681,6 +3037,40 @@ mod tests {
     fn wrap_exec_keeps_original_placeholders() {
         let wrapped = wrap_exec("firefox %u", "browsers");
         assert_eq!(wrapped, "resguard run --class browsers -- firefox %u");
+    }
+
+    #[test]
+    fn parse_first_exec_token_extracts_binary() {
+        assert_eq!(
+            parse_first_exec_token("env FOO=1 /usr/bin/firefox %u").as_deref(),
+            Some("firefox")
+        );
+        assert_eq!(
+            parse_first_exec_token("code --new-window").as_deref(),
+            Some("code")
+        );
+    }
+
+    #[test]
+    fn classify_scope_applies_default_heuristics() {
+        let rules = default_suggest_rules();
+        let got = classify_scope(
+            "app-foo.scope",
+            "app.slice",
+            "/usr/bin/firefox %u",
+            3 * 1024_u64.pow(3),
+            &rules,
+        );
+        assert_eq!(got.map(|v| v.0), Some("browsers".to_string()));
+
+        let got2 = classify_scope(
+            "app-bar.scope",
+            "app.slice",
+            "podman run something",
+            512 * 1024_u64.pow(2),
+            &rules,
+        );
+        assert_eq!(got2.map(|v| v.0), Some("heavy".to_string()));
     }
 
     #[test]

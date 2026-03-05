@@ -1,4 +1,5 @@
 use crate::profile::Profile;
+use regex::Regex;
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,6 +181,30 @@ pub fn validate_profile(profile: &Profile) -> Vec<ValidationError> {
         }
     }
 
+    if let Some(suggest) = &profile.spec.suggest {
+        for (idx, rule) in suggest.rules.iter().enumerate() {
+            let base = format!("spec.suggest.rules[{idx}]");
+            if rule.pattern.trim().is_empty() {
+                errors.push(ValidationError::new(
+                    format!("{base}.pattern"),
+                    "must not be empty",
+                ));
+            } else if let Err(err) = Regex::new(&rule.pattern) {
+                errors.push(ValidationError::new(
+                    format!("{base}.pattern"),
+                    format!("invalid regex: {err}"),
+                ));
+            }
+
+            if rule.class.trim().is_empty() {
+                errors.push(ValidationError::new(
+                    format!("{base}.class"),
+                    "must not be empty",
+                ));
+            }
+        }
+    }
+
     validate_classes(&profile.spec.classes, "spec.classes", &mut errors);
     if let Some(slices) = &profile.spec.slices {
         validate_classes(&slices.classes, "spec.slices.classes", &mut errors);
@@ -251,6 +276,8 @@ fn validate_classes(
 
 #[cfg(test)]
 mod tests {
+    use crate::profile::{Metadata, Profile, Spec, Suggest, SuggestRule};
+
     use super::{parse_cpuset, parse_size_to_bytes, validate_memory};
 
     #[test]
@@ -288,5 +315,36 @@ mod tests {
     fn validate_memory_requires_max_ge_high() {
         assert!(validate_memory(Some("12G"), Some("14G")).is_ok());
         assert!(validate_memory(Some("12G"), Some("10G")).is_err());
+    }
+
+    #[test]
+    fn validate_profile_rejects_invalid_suggest_rules() {
+        let profile = Profile {
+            api_version: "resguard.io/v1".to_string(),
+            kind: "Profile".to_string(),
+            metadata: Metadata {
+                name: "demo".to_string(),
+            },
+            spec: Spec {
+                suggest: Some(Suggest {
+                    rules: vec![SuggestRule {
+                        pattern: "(".to_string(),
+                        class: "".to_string(),
+                    }],
+                }),
+                ..Spec::default()
+            },
+        };
+        let errors = super::validate_profile(&profile);
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.path == "spec.suggest.rules[0].pattern")
+        );
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.path == "spec.suggest.rules[0].class")
+        );
     }
 }

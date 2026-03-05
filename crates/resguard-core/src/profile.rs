@@ -25,6 +25,7 @@ pub struct Spec {
     #[serde(default)]
     pub classes: BTreeMap<String, Class>,
     pub slices: Option<Slices>,
+    pub suggest: Option<Suggest>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -80,4 +81,18 @@ pub struct Class {
 pub struct Slices {
     #[serde(default)]
     pub classes: BTreeMap<String, Class>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Suggest {
+    #[serde(default)]
+    pub rules: Vec<SuggestRule>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestRule {
+    pub pattern: String,
+    pub class: String,
 }

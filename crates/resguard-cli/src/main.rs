@@ -16,7 +16,7 @@ use resguard_system::{
     read_pressure_1min, systemctl_cat_unit, systemctl_is_active, systemctl_show_props, systemd_run,
     write_file,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
@@ -152,9 +152,13 @@ enum DesktopCmd {
         desktop_id: String,
         #[arg(long)]
         class: String,
+        #[arg(long)]
+        force: bool,
     },
     Unwrap {
         desktop_id: String,
+        #[arg(long)]
+        class: String,
     },
     Doctor,
 }
@@ -1340,6 +1344,37 @@ struct DesktopListItem {
     fields: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone)]
+struct DesktopSourceEntry {
+    desktop_id: String,
+    source_path: PathBuf,
+    origin: DesktopOrigin,
+    fields: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DesktopMappingEntry {
+    wrapper_desktop_id: String,
+    wrapper_path: String,
+    source_path: String,
+    created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DesktopMappingStore {
+    version: u32,
+    mappings: BTreeMap<String, BTreeMap<String, DesktopMappingEntry>>,
+}
+
+impl Default for DesktopMappingStore {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            mappings: BTreeMap::new(),
+        }
+    }
+}
+
 fn parse_desktop_entry(s: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     let mut in_entry = false;
@@ -1357,6 +1392,124 @@ fn parse_desktop_entry(s: &str) -> HashMap<String, String> {
         }
     }
     map
+}
+
+fn validate_desktop_id(id: &str) -> Result<()> {
+    if id.is_empty() || id.len() > 200 {
+        return Err(anyhow!("invalid desktop id length"));
+    }
+    if !id.ends_with(".desktop") {
+        return Err(anyhow!("desktop id must end with .desktop"));
+    }
+    if id.contains('/') || id.contains('\\') {
+        return Err(anyhow!("desktop id must not contain path separators"));
+    }
+    if id.contains("..") {
+        return Err(anyhow!("desktop id must not contain '..'"));
+    }
+    Ok(())
+}
+
+fn validate_class_name(class: &str) -> Result<()> {
+    if class.is_empty() {
+        return Err(anyhow!("class must not be empty"));
+    }
+    if class
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        Ok(())
+    } else {
+        Err(anyhow!(
+            "class contains invalid characters (allowed: a-z A-Z 0-9 - _)"
+        ))
+    }
+}
+
+fn wrapper_desktop_id(desktop_id: &str, class: &str) -> String {
+    format!("{desktop_id}.resguard-{class}.desktop")
+}
+
+fn wrap_exec(exec: &str, class: &str) -> String {
+    format!("resguard run --class {class} -- {}", exec.trim())
+}
+
+fn render_wrapper(source: &HashMap<String, String>, class: &str) -> Result<String> {
+    let name = source
+        .get("Name")
+        .cloned()
+        .unwrap_or_else(|| "Wrapped App".to_string());
+    let exec = source
+        .get("Exec")
+        .map(|v| v.trim())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow!("Exec missing"))?;
+
+    let mut out = String::new();
+    out.push_str("[Desktop Entry]\n");
+    out.push_str(&format!("Name={} (Resguard: {})\n", name, class));
+    out.push_str(&format!("Exec={}\n", wrap_exec(exec, class)));
+    for k in [
+        "Type",
+        "Icon",
+        "TryExec",
+        "Terminal",
+        "Categories",
+        "StartupWMClass",
+        "MimeType",
+        "Path",
+        "GenericName",
+        "Comment",
+        "DBusActivatable",
+    ] {
+        if let Some(v) = source.get(k) {
+            out.push_str(&format!("{k}={v}\n"));
+        }
+    }
+    Ok(out)
+}
+
+fn user_home_dir() -> Result<PathBuf> {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow!("HOME is not set"))
+}
+
+fn user_applications_dir() -> Result<PathBuf> {
+    Ok(user_home_dir()?.join(".local/share/applications"))
+}
+
+fn desktop_mapping_path() -> Result<PathBuf> {
+    Ok(user_home_dir()?.join(".config/resguard/desktop-mapping.yml"))
+}
+
+fn read_desktop_mapping_store() -> Result<DesktopMappingStore> {
+    let path = desktop_mapping_path()?;
+    if !path.exists() {
+        return Ok(DesktopMappingStore::default());
+    }
+    let content = fs::read_to_string(&path)
+        .with_context(|| format!("failed to read mapping store {}", path.display()))?;
+    let store: DesktopMappingStore = serde_yaml::from_str(&content)
+        .with_context(|| format!("failed to parse mapping store {}", path.display()))?;
+    Ok(store)
+}
+
+fn write_desktop_mapping_store(store: &DesktopMappingStore) -> Result<()> {
+    let path = desktop_mapping_path()?;
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let content = serde_yaml::to_string(store)?;
+    fs::write(&path, content).with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(())
+}
+
+fn now_timestamp_utc() -> String {
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => format!("unix:{}", d.as_secs()),
+        Err(_) => "unix:0".to_string(),
+    }
 }
 
 fn short_exec(exec: &str) -> String {
@@ -1392,6 +1545,37 @@ fn origin_matches(filter: DesktopOrigin, item_origin: DesktopOrigin) -> bool {
         DesktopOrigin::User => item_origin == DesktopOrigin::User,
         DesktopOrigin::System => item_origin == DesktopOrigin::System,
     }
+}
+
+fn resolve_desktop_source(desktop_id: &str) -> Result<DesktopSourceEntry> {
+    validate_desktop_id(desktop_id)?;
+
+    for (dir, origin) in desktop_scan_dirs() {
+        let path = dir.join(desktop_id);
+        if !path.is_file() {
+            continue;
+        }
+        let content = fs::read_to_string(&path)
+            .with_context(|| format!("failed to read desktop file {}", path.display()))?;
+        let fields = parse_desktop_entry(&content);
+        if fields.is_empty() {
+            return Err(anyhow!(
+                "desktop entry {} has no [Desktop Entry] group",
+                path.display()
+            ));
+        }
+        return Ok(DesktopSourceEntry {
+            desktop_id: desktop_id.to_string(),
+            source_path: path,
+            origin,
+            fields,
+        });
+    }
+
+    Err(anyhow!(
+        "desktop id '{}' not found in XDG search paths",
+        desktop_id
+    ))
 }
 
 fn discover_desktop_entries(
@@ -1519,6 +1703,188 @@ fn handle_desktop_list(format: &str, filter: Option<String>, origin: DesktopOrig
     }
 
     Ok(0)
+}
+
+fn command_exists_in_path(cmd: &str) -> bool {
+    let Some(path_var) = env::var_os("PATH") else {
+        return false;
+    };
+    env::split_paths(&path_var).any(|p| p.join(cmd).is_file())
+}
+
+fn handle_desktop_wrap(desktop_id: &str, class: &str, force: bool) -> Result<i32> {
+    println!("command=desktop wrap");
+    validate_desktop_id(desktop_id)?;
+    validate_class_name(class)?;
+
+    let source = resolve_desktop_source(desktop_id)?;
+    let wrapper_id = wrapper_desktop_id(&source.desktop_id, class);
+    let wrapper_path = user_applications_dir()?.join(&wrapper_id);
+
+    if wrapper_path.exists() && !force {
+        return Err(anyhow!(
+            "wrapper already exists at {} (use --force to overwrite)",
+            wrapper_path.display()
+        ));
+    }
+
+    if source
+        .fields
+        .get("DBusActivatable")
+        .map(|v| v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+    {
+        eprintln!(
+            "warn: source desktop entry has DBusActivatable=true; wrapper may not be used by all launchers"
+        );
+    }
+
+    let wrapper_content = render_wrapper(&source.fields, class)?;
+    write_file(&wrapper_path, &wrapper_content)
+        .with_context(|| format!("failed to write wrapper {}", wrapper_path.display()))?;
+
+    let mut store = read_desktop_mapping_store()?;
+    let by_class = store
+        .mappings
+        .entry(source.desktop_id.clone())
+        .or_insert_with(BTreeMap::new);
+    by_class.insert(
+        class.to_string(),
+        DesktopMappingEntry {
+            wrapper_desktop_id: wrapper_id.clone(),
+            wrapper_path: wrapper_path.display().to_string(),
+            source_path: source.source_path.display().to_string(),
+            created_at: now_timestamp_utc(),
+        },
+    );
+    write_desktop_mapping_store(&store)?;
+
+    println!("desktop_id={}", source.desktop_id);
+    println!("class={class}");
+    println!(
+        "source={} ({})",
+        source.source_path.display(),
+        match source.origin {
+            DesktopOrigin::User => "user",
+            DesktopOrigin::System => "system",
+            DesktopOrigin::All => "all",
+        }
+    );
+    println!("wrapper_id={wrapper_id}");
+    println!("wrapper_path={}", wrapper_path.display());
+    println!("mapping_file={}", desktop_mapping_path()?.display());
+    Ok(0)
+}
+
+fn handle_desktop_unwrap(desktop_id: &str, class: &str) -> Result<i32> {
+    println!("command=desktop unwrap");
+    validate_desktop_id(desktop_id)?;
+    validate_class_name(class)?;
+
+    let mut store = read_desktop_mapping_store()?;
+    let mut removed = false;
+
+    if let Some(by_class) = store.mappings.get_mut(desktop_id) {
+        if let Some(entry) = by_class.remove(class) {
+            let wrapper_path = PathBuf::from(&entry.wrapper_path);
+            if wrapper_path.exists() {
+                fs::remove_file(&wrapper_path).with_context(|| {
+                    format!("failed to remove wrapper {}", wrapper_path.display())
+                })?;
+            }
+            removed = true;
+        }
+        if by_class.is_empty() {
+            store.mappings.remove(desktop_id);
+        }
+    }
+
+    if !removed {
+        let fallback = user_applications_dir()?.join(wrapper_desktop_id(desktop_id, class));
+        if fallback.exists() {
+            fs::remove_file(&fallback)
+                .with_context(|| format!("failed to remove wrapper {}", fallback.display()))?;
+            removed = true;
+        }
+    }
+
+    write_desktop_mapping_store(&store)?;
+
+    if removed {
+        println!("desktop_id={desktop_id}");
+        println!("class={class}");
+        println!("status=removed");
+        Ok(0)
+    } else {
+        println!("desktop_id={desktop_id}");
+        println!("class={class}");
+        println!("status=not-found");
+        Ok(1)
+    }
+}
+
+fn handle_desktop_doctor() -> Result<i32> {
+    println!("command=desktop doctor");
+    let mut partial = false;
+
+    println!("Desktop checks");
+    if command_exists_in_path("resguard") {
+        println!("OK  resguard found in PATH");
+    } else {
+        println!("WARN resguard not found in PATH");
+        partial = true;
+    }
+
+    let store = read_desktop_mapping_store()?;
+    if store.mappings.is_empty() {
+        println!("WARN no desktop wrappers in mapping store");
+        println!("hint=create one with: resguard desktop wrap <desktop_id> --class <class>");
+        return Ok(1);
+    }
+
+    println!(
+        "OK  mapping store loaded ({} desktop ids)",
+        store.mappings.len()
+    );
+
+    let mut needs_user_reload_hint = false;
+    for (desktop_id, by_class) in &store.mappings {
+        for (class, entry) in by_class {
+            let wrapper_path = PathBuf::from(&entry.wrapper_path);
+            if wrapper_path.exists() {
+                println!("OK  wrapper exists: {} [{}]", desktop_id, class);
+            } else {
+                println!(
+                    "WARN wrapper missing: {} [{}] at {}",
+                    desktop_id, class, entry.wrapper_path
+                );
+                partial = true;
+            }
+
+            let slice = format!("resguard-{class}.slice");
+            match systemctl_cat_unit(true, &slice) {
+                Ok(true) => println!("OK  user slice present: {}", slice),
+                Ok(false) | Err(_) => {
+                    println!(
+                        "WARN user slice missing or user daemon unavailable: {}",
+                        slice
+                    );
+                    println!(
+                        "hint=apply profile and reload user daemon: sudo resguard apply <profile> --user-daemon-reload"
+                    );
+                    partial = true;
+                    needs_user_reload_hint = true;
+                }
+            }
+        }
+    }
+
+    if needs_user_reload_hint {
+        println!("Hints");
+        println!("WARN run in your desktop session: systemctl --user daemon-reload");
+    }
+
+    Ok(if partial { 1 } else { 0 })
 }
 
 fn parse_duration_arg(input: &str) -> Result<Duration> {
@@ -1846,23 +2212,33 @@ fn main() {
                     }
                 }
             }
-            DesktopCmd::Wrap { desktop_id, class } => {
-                println!("command=desktop wrap");
-                println!("desktop_id={} class={}", desktop_id, class);
-                println!("status=stub");
-                0
+            DesktopCmd::Wrap {
+                desktop_id,
+                class,
+                force,
+            } => match handle_desktop_wrap(&desktop_id, &class, force) {
+                Ok(code) => code,
+                Err(err) => {
+                    eprintln!("desktop wrap failed: {err}");
+                    1
+                }
+            },
+            DesktopCmd::Unwrap { desktop_id, class } => {
+                match handle_desktop_unwrap(&desktop_id, &class) {
+                    Ok(code) => code,
+                    Err(err) => {
+                        eprintln!("desktop unwrap failed: {err}");
+                        1
+                    }
+                }
             }
-            DesktopCmd::Unwrap { desktop_id } => {
-                println!("command=desktop unwrap");
-                println!("desktop_id={}", desktop_id);
-                println!("status=stub");
-                0
-            }
-            DesktopCmd::Doctor => {
-                println!("command=desktop doctor");
-                println!("status=stub");
-                0
-            }
+            DesktopCmd::Doctor => match handle_desktop_doctor() {
+                Ok(code) => code,
+                Err(err) => {
+                    eprintln!("desktop doctor failed: {err}");
+                    1
+                }
+            },
         },
     };
 
@@ -2157,5 +2533,39 @@ mod tests {
         let restored = std::fs::read_to_string(&backed_up_target).expect("restored content");
         assert_eq!(restored, "BEFORE\n");
         assert!(!created_target.exists());
+    }
+
+    #[test]
+    fn desktop_id_validation_enforces_safe_format() {
+        assert!(validate_desktop_id("firefox.desktop").is_ok());
+        assert!(validate_desktop_id("").is_err());
+        assert!(validate_desktop_id("firefox").is_err());
+        assert!(validate_desktop_id("../firefox.desktop").is_err());
+        assert!(validate_desktop_id("foo/bar.desktop").is_err());
+    }
+
+    #[test]
+    fn wrap_exec_keeps_original_placeholders() {
+        let wrapped = wrap_exec("firefox %u", "browsers");
+        assert_eq!(wrapped, "resguard run --class browsers -- firefox %u");
+    }
+
+    #[test]
+    fn render_wrapper_preserves_common_fields() {
+        let mut src = HashMap::new();
+        src.insert("Name".to_string(), "Firefox".to_string());
+        src.insert("Exec".to_string(), "firefox %u".to_string());
+        src.insert("Type".to_string(), "Application".to_string());
+        src.insert("Icon".to_string(), "firefox".to_string());
+        src.insert("Terminal".to_string(), "false".to_string());
+        src.insert("Categories".to_string(), "Network;WebBrowser;".to_string());
+
+        let wrapped = render_wrapper(&src, "browsers").expect("render wrapper");
+        assert!(wrapped.contains("Name=Firefox (Resguard: browsers)\n"));
+        assert!(wrapped.contains("Exec=resguard run --class browsers -- firefox %u\n"));
+        assert!(wrapped.contains("Type=Application\n"));
+        assert!(wrapped.contains("Icon=firefox\n"));
+        assert!(wrapped.contains("Terminal=false\n"));
+        assert!(wrapped.contains("Categories=Network;WebBrowser;\n"));
     }
 }

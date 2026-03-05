@@ -4,8 +4,8 @@
 
 - v0.1: Agentless core (implemented baseline)
 - v0.2: Desktop Wrapper Generator (fully implemented, not only stubs)
-- v0.3: Auto-classification and suggestions (daemon optional)
-- v0.4: Power UX and resilience (TUI + optional watchdog)
+- v0.3.0: Auto-classification and suggestions (daemon optional)
+- v0.4.0: Power UX and resilience (TUI + optional watchdog)
 
 ---
 
@@ -79,7 +79,7 @@ Exit criteria for v0.2:
 
 ---
 
-## Milestone v0.3 — Auto-classification and Suggestions
+## Milestone v0.3.0 — Auto-classification and Suggestions
 
 Goal:
 
@@ -114,7 +114,7 @@ Exit criteria for v0.3:
 
 ---
 
-## Milestone v0.4 — TUI Visualizer + Freeze Watchdog
+## Milestone v0.4.0 — TUI Visualizer + Freeze Watchdog
 
 Goal:
 

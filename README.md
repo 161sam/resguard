@@ -91,16 +91,12 @@ cargo run -p resguard -- status
 - [Design](docs/design.md)
 - [Safety](docs/safety.md)
 - [Profiles](docs/profiles.md)
+- [Releases](docs/releases.md)
 
 ## Release / Tagging
 
-v0.2.0 Release vorbereiten und taggen:
+Release-Ablauf:
 
 ```bash
-git checkout main
-git pull --ff-only
-cargo build
-cargo test
-git tag -a v0.2.0 -m "resguard v0.2.0"
-git push origin v0.2.0
+see docs/releases.md
 ```

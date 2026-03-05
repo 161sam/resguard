@@ -27,6 +27,7 @@ fi
 
 ARTIFACT_NAME="${PKG_NAME}_${VERSION}_${ARCH}.deb"
 STAGE_DIR="$ROOT_DIR/packaging/deb/.build/${PKG_NAME}_${VERSION}_${ARCH}"
+INCLUDE_DAEMON="${RESGUARD_DEB_WITH_DAEMON:-0}"
 
 rm -rf "$STAGE_DIR"
 install -d -m 0755 "$STAGE_DIR/DEBIAN"
@@ -45,6 +46,13 @@ install -m 0755 "$PRERM_FILE" "$STAGE_DIR/DEBIAN/prerm"
 install -m 0644 "$ROOT_DIR/README.md" "$STAGE_DIR/usr/share/doc/resguard/README.md"
 install -m 0644 "$ROOT_DIR/CHANGELOG.md" "$STAGE_DIR/usr/share/doc/resguard/CHANGELOG.md"
 install -m 0644 "$ROOT_DIR/docs/man/resguard.1" "$STAGE_DIR/usr/share/man/man1/resguard.1"
+
+if [[ "$INCLUDE_DAEMON" == "1" ]]; then
+  cargo build --release -p resguard-daemon --manifest-path "$ROOT_DIR/Cargo.toml"
+  install -m 0755 "$ROOT_DIR/target/release/resguardd" "$STAGE_DIR/usr/bin/resguardd"
+  install -d -m 0755 "$STAGE_DIR/etc/resguard"
+  install -m 0644 "$ROOT_DIR/packaging/etc/resguard/resguardd.yml" "$STAGE_DIR/etc/resguard/resguardd.yml"
+fi
 
 rm -f "$ROOT_DIR/$ARTIFACT_NAME"
 if dpkg-deb --help 2>/dev/null | grep -q -- "--root-owner-group"; then

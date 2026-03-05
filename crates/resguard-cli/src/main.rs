@@ -79,6 +79,7 @@ enum Commands {
         to: Option<String>,
     },
     Doctor,
+    Metrics,
     Status,
     Run {
         #[arg(long)]
@@ -1152,6 +1153,159 @@ fn handle_doctor(root: &str, state_dir: &str) -> Result<i32> {
     Ok(if partial { 1 } else { 0 })
 }
 
+fn read_meminfo_kb(field: &str) -> Option<u64> {
+    let content = std::fs::read_to_string("/proc/meminfo").ok()?;
+    for line in content.lines() {
+        if let Some(rest) = line.strip_prefix(field) {
+            let parts: Vec<&str> = rest.split_whitespace().collect();
+            let kb = parts.first()?.parse::<u64>().ok()?;
+            return Some(kb);
+        }
+    }
+    None
+}
+
+fn format_bytes_human(bytes: u64) -> String {
+    let gb = 1024_u64.pow(3);
+    let mb = 1024_u64.pow(2);
+    if bytes >= gb {
+        format!("{}G", bytes / gb)
+    } else if bytes >= mb {
+        format!("{}M", bytes / mb)
+    } else {
+        format!("{}B", bytes)
+    }
+}
+
+fn parse_u64_prop(props: &BTreeMap<String, String>, key: &str) -> Option<u64> {
+    props.get(key).and_then(|v| v.parse::<u64>().ok())
+}
+
+fn list_system_slices() -> Vec<String> {
+    let out = Command::new("systemctl")
+        .args([
+            "list-units",
+            "--type=slice",
+            "--all",
+            "--no-legend",
+            "--no-pager",
+        ])
+        .output();
+    let Ok(out) = out else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut units = Vec::new();
+    for line in text.lines() {
+        if let Some(unit) = line.split_whitespace().next() {
+            if unit.ends_with(".slice") {
+                units.push(unit.to_string());
+            }
+        }
+    }
+    units
+}
+
+fn handle_metrics() -> Result<i32> {
+    println!("command=metrics");
+    let mut partial = false;
+
+    let cpu_p = read_pressure_1min("/proc/pressure/cpu").ok().flatten();
+    let mem_p = read_pressure_1min("/proc/pressure/memory").ok().flatten();
+    let io_p = read_pressure_1min("/proc/pressure/io").ok().flatten();
+
+    println!("CPU pressure");
+    match cpu_p {
+        Some(v) => println!("avg60={:.2}", v),
+        None => {
+            println!("avg60=-");
+            partial = true;
+        }
+    }
+    println!("Memory pressure");
+    match mem_p {
+        Some(v) => println!("avg60={:.2}", v),
+        None => {
+            println!("avg60=-");
+            partial = true;
+        }
+    }
+    println!("IO pressure");
+    match io_p {
+        Some(v) => println!("avg60={:.2}", v),
+        None => {
+            println!("avg60=-");
+            partial = true;
+        }
+    }
+    println!();
+
+    println!("System memory");
+    let total = read_meminfo_kb("MemTotal:");
+    let available = read_meminfo_kb("MemAvailable:");
+    match (total, available) {
+        (Some(t), Some(a)) => {
+            println!("total={}", format_bytes_human(t * 1024));
+            println!("available={}", format_bytes_human(a * 1024));
+            println!("used={}", format_bytes_human((t.saturating_sub(a)) * 1024));
+        }
+        _ => {
+            println!("total=-");
+            println!("available=-");
+            partial = true;
+        }
+    }
+    println!();
+
+    let keys = [
+        "MemoryCurrent",
+        "MemoryPeak",
+        "MemoryLow",
+        "MemoryHigh",
+        "MemoryMax",
+    ];
+    println!("User slice usage");
+    match systemctl_show_props(false, "user.slice", &keys) {
+        Ok(props) => {
+            let current = parse_u64_prop(&props, "MemoryCurrent").unwrap_or(0);
+            let max = status_value(&props, "MemoryMax");
+            let high = status_value(&props, "MemoryHigh");
+            println!("user.slice MemoryCurrent: {}", format_bytes_human(current));
+            println!("user.slice MemoryHigh: {}", high);
+            println!("user.slice MemoryMax: {}", max);
+        }
+        Err(err) => {
+            println!("user.slice: unavailable ({})", err);
+            partial = true;
+        }
+    }
+    println!();
+
+    println!("Top slices");
+    let mut slice_usage: Vec<(String, u64)> = Vec::new();
+    for unit in list_system_slices() {
+        if let Ok(props) = systemctl_show_props(false, &unit, &["MemoryCurrent"]) {
+            if let Some(cur) = parse_u64_prop(&props, "MemoryCurrent") {
+                slice_usage.push((unit, cur));
+            }
+        }
+    }
+    if slice_usage.is_empty() {
+        println!("unavailable");
+        partial = true;
+    } else {
+        slice_usage.sort_by(|a, b| b.1.cmp(&a.1));
+        for (unit, cur) in slice_usage.into_iter().take(5) {
+            println!("{} {}", unit, format_bytes_human(cur));
+        }
+    }
+
+    Ok(if partial { 1 } else { 0 })
+}
+
 fn main() {
     let cli = Cli::parse();
     print_global_context(&cli);
@@ -1237,6 +1391,13 @@ fn main() {
             Ok(code) => code,
             Err(err) => {
                 eprintln!("doctor failed: {err}");
+                1
+            }
+        },
+        Commands::Metrics => match handle_metrics() {
+            Ok(code) => code,
+            Err(err) => {
+                eprintln!("metrics failed: {err}");
                 1
             }
         },

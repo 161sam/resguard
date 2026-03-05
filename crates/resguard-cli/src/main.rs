@@ -190,12 +190,20 @@ enum DesktopCmd {
         #[arg(long)]
         class: String,
         #[arg(long)]
+        dry_run: bool,
+        #[arg(long = "print")]
+        print_only: bool,
+        #[arg(long = "override")]
+        override_mode: bool,
+        #[arg(long)]
         force: bool,
     },
     Unwrap {
         desktop_id: String,
         #[arg(long)]
         class: String,
+        #[arg(long = "override")]
+        override_mode: bool,
     },
     Doctor,
 }
@@ -232,6 +240,19 @@ struct RunRequest {
     no_check: bool,
     wait: bool,
     command: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DesktopWrapOptions {
+    force: bool,
+    dry_run: bool,
+    print_only: bool,
+    override_mode: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DesktopUnwrapOptions {
+    override_mode: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1281,7 +1302,16 @@ fn handle_suggest(
                     continue;
                 }
 
-                match handle_desktop_wrap(desktop_id, &s.class, false) {
+                match handle_desktop_wrap(
+                    desktop_id,
+                    &s.class,
+                    DesktopWrapOptions {
+                        force: false,
+                        dry_run: false,
+                        print_only: false,
+                        override_mode: false,
+                    },
+                ) {
                     Ok(0) => println!("ok\t{}\t{}\twrapped", desktop_id, s.class),
                     Ok(code) => {
                         println!("warn\t{}\t{}\twrap returned {}", desktop_id, s.class, code)
@@ -1987,6 +2017,7 @@ struct DesktopSourceEntry {
     desktop_id: String,
     source_path: PathBuf,
     origin: DesktopOrigin,
+    source_content: String,
     fields: HashMap<String, String>,
 }
 
@@ -1996,6 +2027,8 @@ struct DesktopMappingEntry {
     wrapper_path: String,
     source_path: String,
     created_at: String,
+    mode: Option<String>,
+    backup_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2102,6 +2135,11 @@ fn wrapper_path_for(desktop_id: &str, class: &str) -> Result<PathBuf> {
     Ok(path)
 }
 
+fn override_path_for(desktop_id: &str) -> Result<PathBuf> {
+    validate_desktop_id(desktop_id)?;
+    Ok(user_applications_dir()?.join(desktop_id))
+}
+
 fn wrap_exec(exec: &str, class: &str) -> String {
     format!("resguard run --class {class} -- {}", exec.trim())
 }
@@ -2184,6 +2222,76 @@ fn now_timestamp_utc() -> String {
     }
 }
 
+fn now_timestamp_for_path() -> String {
+    match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        Ok(d) => format!("unix-{}", d.as_secs()),
+        Err(_) => "unix-0".to_string(),
+    }
+}
+
+fn create_override_backup(path: &Path) -> Result<PathBuf> {
+    let backup_dir = user_applications_dir()?
+        .join(".resguard-backup")
+        .join(now_timestamp_for_path());
+    fs::create_dir_all(&backup_dir)
+        .with_context(|| format!("failed to create backup dir {}", backup_dir.display()))?;
+    let filename = path
+        .file_name()
+        .ok_or_else(|| anyhow!("override target has no filename"))?;
+    let backup_path = backup_dir.join(filename);
+    fs::copy(path, &backup_path).with_context(|| {
+        format!(
+            "failed to back up {} to {}",
+            path.display(),
+            backup_path.display()
+        )
+    })?;
+    Ok(backup_path)
+}
+
+fn render_line_diff(source_label: &str, source: &str, target_label: &str, target: &str) -> String {
+    let a: Vec<&str> = source.lines().collect();
+    let b: Vec<&str> = target.lines().collect();
+    let m = a.len();
+    let n = b.len();
+    let mut lcs = vec![vec![0usize; n + 1]; m + 1];
+
+    for i in (0..m).rev() {
+        for j in (0..n).rev() {
+            if a[i] == b[j] {
+                lcs[i][j] = lcs[i + 1][j + 1] + 1;
+            } else {
+                lcs[i][j] = lcs[i + 1][j].max(lcs[i][j + 1]);
+            }
+        }
+    }
+
+    let mut out = String::new();
+    out.push_str(&format!("--- {source_label}\n"));
+    out.push_str(&format!("+++ {target_label}\n"));
+
+    let (mut i, mut j) = (0usize, 0usize);
+    while i < m || j < n {
+        if i < m && j < n && a[i] == b[j] {
+            out.push_str(&format!(" {}\n", a[i]));
+            i += 1;
+            j += 1;
+            continue;
+        }
+        if j < n && (i == m || lcs[i][j + 1] >= lcs[i + 1][j]) {
+            out.push_str(&format!("+{}\n", b[j]));
+            j += 1;
+            continue;
+        }
+        if i < m {
+            out.push_str(&format!("-{}\n", a[i]));
+            i += 1;
+        }
+    }
+
+    out
+}
+
 fn short_exec(exec: &str) -> String {
     let max = 80usize;
     if exec.chars().count() <= max {
@@ -2240,6 +2348,7 @@ fn resolve_desktop_source(desktop_id: &str) -> Result<DesktopSourceEntry> {
             desktop_id: desktop_id.to_string(),
             source_path: path,
             origin,
+            source_content: content,
             fields,
         });
     }
@@ -2384,17 +2493,35 @@ fn command_exists_in_path(cmd: &str) -> bool {
     env::split_paths(&path_var).any(|p| p.join(cmd).is_file())
 }
 
-fn handle_desktop_wrap(desktop_id: &str, class: &str, force: bool) -> Result<i32> {
-    println!("command=desktop wrap");
-
+fn handle_desktop_wrap(desktop_id: &str, class: &str, opts: DesktopWrapOptions) -> Result<i32> {
     let source = resolve_desktop_source(desktop_id)?;
     let wrapper_id = wrapper_desktop_id(&source.desktop_id, class);
-    let wrapper_path = wrapper_path_for(&source.desktop_id, class)?;
+    let target_path = if opts.override_mode {
+        override_path_for(&source.desktop_id)?
+    } else {
+        wrapper_path_for(&source.desktop_id, class)?
+    };
+    let target_id = if opts.override_mode {
+        source.desktop_id.clone()
+    } else {
+        wrapper_id.clone()
+    };
 
-    if wrapper_path.exists() && !force {
+    if opts.print_only && opts.dry_run {
         return Err(anyhow!(
-            "wrapper already exists at {} (use --force to overwrite)",
-            wrapper_path.display()
+            "invalid arguments: --print and --dry-run cannot be combined"
+        ));
+    }
+    if opts.override_mode && !opts.force {
+        return Err(anyhow!(
+            "override mode is destructive by design: pass both --override and --force"
+        ));
+    }
+
+    if target_path.exists() && !opts.force {
+        return Err(anyhow!(
+            "target already exists at {} (use --force to overwrite)",
+            target_path.display()
         ));
     }
 
@@ -2410,8 +2537,58 @@ fn handle_desktop_wrap(desktop_id: &str, class: &str, force: bool) -> Result<i32
     }
 
     let wrapper_content = render_wrapper(&source.fields, class)?;
-    write_file(&wrapper_path, &wrapper_content)
-        .with_context(|| format!("failed to write wrapper {}", wrapper_path.display()))?;
+    if opts.print_only {
+        print!("{wrapper_content}");
+        return Ok(0);
+    }
+
+    if opts.dry_run {
+        println!("command=desktop wrap");
+        println!(
+            "mode={}",
+            if opts.override_mode {
+                "override"
+            } else {
+                "wrapper"
+            }
+        );
+        println!("desktop_id={}", source.desktop_id);
+        println!("class={class}");
+        println!("target_id={target_id}");
+        println!("target_path={}", target_path.display());
+        println!("write=false");
+        println!(
+            "{}",
+            render_line_diff(
+                &source.source_path.display().to_string(),
+                &source.source_content,
+                &target_path.display().to_string(),
+                &wrapper_content
+            )
+        );
+        return Ok(0);
+    }
+
+    if opts.override_mode {
+        eprintln!("warn: --override writes directly to user desktop-id path");
+        eprintln!("warn: target={}", target_path.display());
+        eprintln!(
+            "warn: backup will be stored in ~/.local/share/applications/.resguard-backup/<timestamp>/"
+        );
+    }
+
+    if let Some(parent) = target_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+
+    let mut backup_path: Option<PathBuf> = None;
+    if opts.override_mode && target_path.exists() {
+        backup_path = Some(create_override_backup(&target_path)?);
+    }
+
+    write_file(&target_path, &wrapper_content)
+        .with_context(|| format!("failed to write wrapper {}", target_path.display()))?;
 
     let mut store = read_desktop_mapping_store()?;
     let by_class = store
@@ -2421,16 +2598,31 @@ fn handle_desktop_wrap(desktop_id: &str, class: &str, force: bool) -> Result<i32
     by_class.insert(
         class.to_string(),
         DesktopMappingEntry {
-            wrapper_desktop_id: wrapper_id.clone(),
-            wrapper_path: wrapper_path.display().to_string(),
+            wrapper_desktop_id: target_id.clone(),
+            wrapper_path: target_path.display().to_string(),
             source_path: source.source_path.display().to_string(),
             created_at: now_timestamp_utc(),
+            mode: Some(if opts.override_mode {
+                "override".to_string()
+            } else {
+                "wrapper".to_string()
+            }),
+            backup_path: backup_path.as_ref().map(|p| p.display().to_string()),
         },
     );
     write_desktop_mapping_store(&store)?;
 
+    println!("command=desktop wrap");
     println!("desktop_id={}", source.desktop_id);
     println!("class={class}");
+    println!(
+        "mode={}",
+        if opts.override_mode {
+            "override"
+        } else {
+            "wrapper"
+        }
+    );
     println!(
         "source={} ({})",
         source.source_path.display(),
@@ -2440,18 +2632,26 @@ fn handle_desktop_wrap(desktop_id: &str, class: &str, force: bool) -> Result<i32
             DesktopOrigin::All => "all",
         }
     );
-    println!("wrapper_id={wrapper_id}");
-    println!("wrapper_path={}", wrapper_path.display());
+    println!("wrapper_id={target_id}");
+    println!("wrapper_path={}", target_path.display());
+    if let Some(path) = backup_path {
+        println!("backup_path={}", path.display());
+    }
     println!("mapping_file={}", desktop_mapping_path()?.display());
     Ok(0)
 }
 
-fn handle_desktop_unwrap(desktop_id: &str, class: &str) -> Result<i32> {
+fn handle_desktop_unwrap(desktop_id: &str, class: &str, opts: DesktopUnwrapOptions) -> Result<i32> {
     println!("command=desktop unwrap");
-    let expected_wrapper_path = wrapper_path_for(desktop_id, class)?;
+    let expected_wrapper_path = if opts.override_mode {
+        override_path_for(desktop_id)?
+    } else {
+        wrapper_path_for(desktop_id, class)?
+    };
 
     let mut store = read_desktop_mapping_store()?;
     let mut removed = false;
+    let mut restored_backup_path: Option<PathBuf> = None;
 
     if let Some(by_class) = store.mappings.get_mut(desktop_id) {
         if let Some(entry) = by_class.remove(class) {
@@ -2462,15 +2662,36 @@ fn handle_desktop_unwrap(desktop_id: &str, class: &str) -> Result<i32> {
                     expected_wrapper_path.display()
                 );
             }
-            if expected_wrapper_path.exists() {
+            if opts.override_mode {
+                if let Some(backup) = &entry.backup_path {
+                    let backup_path = PathBuf::from(backup);
+                    if backup_path.is_file() {
+                        if let Some(parent) = expected_wrapper_path.parent() {
+                            fs::create_dir_all(parent).with_context(|| {
+                                format!("failed to create {}", parent.display())
+                            })?;
+                        }
+                        fs::copy(&backup_path, &expected_wrapper_path).with_context(|| {
+                            format!(
+                                "failed to restore backup {} to {}",
+                                backup_path.display(),
+                                expected_wrapper_path.display()
+                            )
+                        })?;
+                        removed = true;
+                        restored_backup_path = Some(backup_path);
+                    }
+                }
+            }
+            if !removed && expected_wrapper_path.exists() {
                 fs::remove_file(&expected_wrapper_path).with_context(|| {
                     format!(
                         "failed to remove wrapper {}",
                         expected_wrapper_path.display()
                     )
                 })?;
+                removed = true;
             }
-            removed = true;
         }
         if by_class.is_empty() {
             store.mappings.remove(desktop_id);
@@ -2494,11 +2715,32 @@ fn handle_desktop_unwrap(desktop_id: &str, class: &str) -> Result<i32> {
     if removed {
         println!("desktop_id={desktop_id}");
         println!("class={class}");
-        println!("status=removed");
+        println!(
+            "mode={}",
+            if opts.override_mode {
+                "override"
+            } else {
+                "wrapper"
+            }
+        );
+        if let Some(path) = restored_backup_path {
+            println!("status=restored-backup");
+            println!("backup_path={}", path.display());
+        } else {
+            println!("status=removed");
+        }
         Ok(0)
     } else {
         println!("desktop_id={desktop_id}");
         println!("class={class}");
+        println!(
+            "mode={}",
+            if opts.override_mode {
+                "override"
+            } else {
+                "wrapper"
+            }
+        );
         println!("status=not-found");
         Ok(1)
     }
@@ -2966,16 +3208,36 @@ fn main() {
             DesktopCmd::Wrap {
                 desktop_id,
                 class,
+                dry_run,
+                print_only,
+                override_mode,
                 force,
-            } => match handle_desktop_wrap(&desktop_id, &class, force) {
+            } => match handle_desktop_wrap(
+                &desktop_id,
+                &class,
+                DesktopWrapOptions {
+                    force,
+                    dry_run,
+                    print_only,
+                    override_mode,
+                },
+            ) {
                 Ok(code) => code,
                 Err(err) => {
                     eprintln!("desktop wrap failed: {err}");
                     1
                 }
             },
-            DesktopCmd::Unwrap { desktop_id, class } => {
-                match handle_desktop_unwrap(&desktop_id, &class) {
+            DesktopCmd::Unwrap {
+                desktop_id,
+                class,
+                override_mode,
+            } => {
+                match handle_desktop_unwrap(
+                    &desktop_id,
+                    &class,
+                    DesktopUnwrapOptions { override_mode },
+                ) {
                     Ok(code) => code,
                     Err(err) => {
                         eprintln!("desktop unwrap failed: {err}");
@@ -3400,5 +3662,150 @@ mod tests {
         assert!(wrapped.contains("Icon=firefox\n"));
         assert!(wrapped.contains("Terminal=false\n"));
         assert!(wrapped.contains("Categories=Network;WebBrowser;\n"));
+    }
+
+    #[test]
+    fn render_line_diff_marks_changes() {
+        let before = "[Desktop Entry]\nName=Firefox\nExec=firefox %u\n";
+        let after = "[Desktop Entry]\nName=Firefox (Resguard: browsers)\nExec=resguard run --class browsers -- firefox %u\n";
+        let diff = render_line_diff("before.desktop", before, "after.desktop", after);
+        assert!(diff.contains("--- before.desktop\n"));
+        assert!(diff.contains("+++ after.desktop\n"));
+        assert!(diff.contains("-Name=Firefox\n"));
+        assert!(diff.contains("+Name=Firefox (Resguard: browsers)\n"));
+    }
+
+    #[test]
+    fn desktop_wrap_dry_run_and_print_only_do_not_write_files() {
+        let temp = tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let apps = home.join(".local/share/applications");
+        std::fs::create_dir_all(&apps).expect("create apps dir");
+        std::fs::write(
+            apps.join("firefox.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox %u\n",
+        )
+        .expect("write source desktop");
+
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &home);
+
+        let wrapper_path = wrapper_path_for("firefox.desktop", "browsers").expect("wrapper path");
+        let mapping_path = desktop_mapping_path().expect("mapping path");
+
+        let dry_run_code = handle_desktop_wrap(
+            "firefox.desktop",
+            "browsers",
+            DesktopWrapOptions {
+                force: false,
+                dry_run: true,
+                print_only: false,
+                override_mode: false,
+            },
+        )
+        .expect("dry-run code");
+        assert_eq!(dry_run_code, 0);
+        assert!(!wrapper_path.exists());
+        assert!(!mapping_path.exists());
+
+        let print_code = handle_desktop_wrap(
+            "firefox.desktop",
+            "browsers",
+            DesktopWrapOptions {
+                force: false,
+                dry_run: false,
+                print_only: true,
+                override_mode: false,
+            },
+        )
+        .expect("print-only code");
+        assert_eq!(print_code, 0);
+        assert!(!wrapper_path.exists());
+        assert!(!mapping_path.exists());
+
+        match old_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    #[test]
+    fn desktop_wrap_override_requires_force() {
+        let temp = tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let apps = home.join(".local/share/applications");
+        std::fs::create_dir_all(&apps).expect("create apps dir");
+        std::fs::write(
+            apps.join("firefox.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox %u\n",
+        )
+        .expect("write source desktop");
+
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &home);
+
+        let err = handle_desktop_wrap(
+            "firefox.desktop",
+            "browsers",
+            DesktopWrapOptions {
+                force: false,
+                dry_run: false,
+                print_only: false,
+                override_mode: true,
+            },
+        )
+        .expect_err("override without force should fail");
+        assert!(err.to_string().contains("--override"));
+
+        match old_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+
+    #[test]
+    fn desktop_unwrap_override_restores_backup() {
+        let temp = tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let apps = home.join(".local/share/applications");
+        std::fs::create_dir_all(&apps).expect("create apps dir");
+        let source_path = apps.join("firefox.desktop");
+        let original = "[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox %u\n";
+        std::fs::write(&source_path, original).expect("write source desktop");
+
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &home);
+
+        let wrap_code = handle_desktop_wrap(
+            "firefox.desktop",
+            "browsers",
+            DesktopWrapOptions {
+                force: true,
+                dry_run: false,
+                print_only: false,
+                override_mode: true,
+            },
+        )
+        .expect("wrap override code");
+        assert_eq!(wrap_code, 0);
+        let wrapped = std::fs::read_to_string(&source_path).expect("read wrapped content");
+        assert!(wrapped.contains("Exec=resguard run --class browsers -- firefox %u"));
+
+        let unwrap_code = handle_desktop_unwrap(
+            "firefox.desktop",
+            "browsers",
+            DesktopUnwrapOptions {
+                override_mode: true,
+            },
+        )
+        .expect("unwrap override code");
+        assert_eq!(unwrap_code, 0);
+        let restored = std::fs::read_to_string(&source_path).expect("read restored content");
+        assert_eq!(restored, original);
+
+        match old_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
     }
 }

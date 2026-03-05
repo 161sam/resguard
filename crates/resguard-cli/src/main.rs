@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
+use clap_complete::{generate, Shell};
 use regex::Regex;
 use resguard_config::{load_profile_from_store, profile_path, save_profile, validate_profile_file};
 use resguard_core::profile::{
@@ -159,6 +160,10 @@ enum Commands {
         #[command(subcommand)]
         cmd: DaemonCmd,
     },
+    Completion {
+        #[arg(value_enum)]
+        shell: CompletionShell,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -226,6 +231,13 @@ enum DaemonCmd {
     Status,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CompletionShell {
+    Bash,
+    Zsh,
+    Fish,
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
 enum DesktopOrigin {
     User,
@@ -285,6 +297,19 @@ fn print_global_context(cli: &Cli) {
         "format={} verbose={} quiet={} no_color={} root={} config_dir={} state_dir={}",
         cli.format, cli.verbose, cli.quiet, cli.no_color, cli.root, cli.config_dir, cli.state_dir
     );
+}
+
+fn handle_completion(shell: CompletionShell) -> Result<i32> {
+    let mut cmd = Cli::command();
+    let bin_name = cmd.get_name().to_string();
+    let mut out = std::io::stdout();
+    let target = match shell {
+        CompletionShell::Bash => Shell::Bash,
+        CompletionShell::Zsh => Shell::Zsh,
+        CompletionShell::Fish => Shell::Fish,
+    };
+    generate(target, &mut cmd, bin_name, &mut out);
+    Ok(0)
 }
 
 fn format_bytes_binary(bytes: u64) -> String {
@@ -3154,7 +3179,9 @@ fn handle_panic(root: &str, duration: Option<String>) -> Result<i32> {
 
 fn main() {
     let cli = Cli::parse();
-    print_global_context(&cli);
+    if !matches!(&cli.command, Commands::Completion { .. }) {
+        print_global_context(&cli);
+    }
     let format = cli.format.clone();
     let root = cli.root.clone();
     let config_dir = cli.config_dir.clone();
@@ -3480,6 +3507,13 @@ fn main() {
                     1
                 }
             },
+        },
+        Commands::Completion { shell } => match handle_completion(shell) {
+            Ok(code) => code,
+            Err(err) => {
+                eprintln!("completion failed: {err}");
+                1
+            }
         },
     };
 

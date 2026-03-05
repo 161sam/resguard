@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
+use std::time::Duration;
 
 #[derive(Parser, Debug)]
 #[command(name = "resguard", about = "Linux resource guard using systemd slices")]
@@ -80,6 +81,10 @@ enum Commands {
     },
     Doctor,
     Metrics,
+    Panic {
+        #[arg(long, help = "Temporary panic duration like 30s, 10m, 1h")]
+        duration: Option<String>,
+    },
     Status,
     Run {
         #[arg(long)]
@@ -1306,6 +1311,104 @@ fn handle_metrics() -> Result<i32> {
     Ok(if partial { 1 } else { 0 })
 }
 
+fn parse_duration_arg(input: &str) -> Result<Duration> {
+    let s = input.trim();
+    if s.is_empty() {
+        return Err(anyhow!("duration must not be empty"));
+    }
+
+    let split_at = s
+        .char_indices()
+        .find(|(_, c)| !c.is_ascii_digit())
+        .map(|(idx, _)| idx)
+        .unwrap_or(s.len());
+
+    let (num_s, unit_s) = s.split_at(split_at);
+    let n: u64 = num_s
+        .parse()
+        .map_err(|_| anyhow!("invalid duration value: {}", num_s))?;
+
+    let secs = match unit_s {
+        "" | "s" => n,
+        "m" => n.saturating_mul(60),
+        "h" => n.saturating_mul(60 * 60),
+        _ => return Err(anyhow!("invalid duration unit '{}', use s/m/h", unit_s)),
+    };
+    Ok(Duration::from_secs(secs))
+}
+
+fn handle_panic(root: &str, duration: Option<String>) -> Result<i32> {
+    println!("command=panic");
+    if root != "/" {
+        return Err(anyhow!("panic mode requires --root /"));
+    }
+    if !is_root_user()? {
+        return Ok(3);
+    }
+
+    let props = systemctl_show_props(false, "user.slice", &["MemoryMax", "MemoryCurrent"])?;
+    let before_max = props
+        .get("MemoryMax")
+        .cloned()
+        .unwrap_or_else(|| "infinity".to_string());
+    let before_high = systemctl_show_props(false, "user.slice", &["MemoryHigh"])?
+        .get("MemoryHigh")
+        .cloned()
+        .unwrap_or_else(|| "infinity".to_string());
+
+    let base = parse_u64_prop(&props, "MemoryMax")
+        .filter(|v| *v > 0)
+        .or_else(|| parse_u64_prop(&props, "MemoryCurrent").filter(|v| *v > 0))
+        .or_else(|| read_meminfo_kb("MemTotal:").map(|kb| kb * 1024))
+        .ok_or_else(|| anyhow!("failed to resolve base memory for panic mode"))?;
+
+    let target_high = (base as f64 * 0.5) as u64;
+    let target_max = (base as f64 * 0.6) as u64;
+
+    let env = BTreeMap::new();
+    let set_args = vec![
+        "set-property".to_string(),
+        "user.slice".to_string(),
+        format!("MemoryHigh={}", target_high),
+        format!("MemoryMax={}", target_max),
+    ];
+    let status = exec_command("systemctl", &set_args, &env)?;
+    if !status.success() {
+        return Err(anyhow!(
+            "systemctl set-property failed with status {}",
+            status
+        ));
+    }
+
+    println!(
+        "panic_applied user.slice MemoryHigh={} MemoryMax={}",
+        format_bytes_human(target_high),
+        format_bytes_human(target_max)
+    );
+
+    if let Some(d) = duration {
+        let wait = parse_duration_arg(&d)?;
+        println!("panic_duration={}s", wait.as_secs());
+        std::thread::sleep(wait);
+
+        let revert_args = vec![
+            "set-property".to_string(),
+            "user.slice".to_string(),
+            format!("MemoryHigh={}", before_high),
+            format!("MemoryMax={}", before_max),
+        ];
+        let revert_status = exec_command("systemctl", &revert_args, &env)?;
+        if !revert_status.success() {
+            return Err(anyhow!("panic revert failed with status {}", revert_status));
+        }
+        println!("panic_reverted");
+    } else {
+        println!("hint=to revert manually run: sudo systemctl revert user.slice");
+    }
+
+    Ok(0)
+}
+
 fn main() {
     let cli = Cli::parse();
     print_global_context(&cli);
@@ -1398,6 +1501,18 @@ fn main() {
             Ok(code) => code,
             Err(err) => {
                 eprintln!("metrics failed: {err}");
+                1
+            }
+        },
+        Commands::Panic { duration } => match handle_panic(&root, duration) {
+            Ok(code) => {
+                if code == 3 {
+                    eprintln!("permission denied: panic mode requires root");
+                }
+                code
+            }
+            Err(err) => {
+                eprintln!("panic failed: {err}");
                 1
             }
         },

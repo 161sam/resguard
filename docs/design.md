@@ -1,4 +1,4 @@
-# Resguard Design (v0.1 implementation)
+# Resguard Design (v0.1 implementation + v0.2+ direction)
 
 ## Ziel
 
@@ -8,11 +8,11 @@ Resguard hält Linux-Systeme unter Last bedienbar, indem es systemd slices konfi
 
 Workspace:
 
-- `resguard-cli`: CLI + Command Dispatch
-- `resguard-core`: Profile, Validation, Planner, Renderer
-- `resguard-system`: Linux/systemd Adapter (`systemctl`, `systemd-run`, `/proc`)
-- `resguard-config`: Profile Store Load/Save
-- `resguard-state`: State/Backups/Rollback-Manifest
+- `resguard-cli`: CLI + command dispatch
+- `resguard-core`: profile model, validation, planner, renderers
+- `resguard-system`: Linux/systemd adapters (`systemctl`, `systemd-run`, `/proc`)
+- `resguard-config`: profile load/save
+- `resguard-state`: transactional state, backups, rollback manifest
 
 ## Pfadmodell
 
@@ -22,16 +22,12 @@ Defaults:
 - `state_dir = /var/lib/resguard`
 - `root = /`
 
-`--root` wirkt als Prefix auf Dateioperationen:
-
-- `${root}/etc/resguard/...`
-- `${root}/var/lib/resguard/...`
-- `${root}/etc/systemd/...`
+`--root` applies as filesystem prefix for config/state/systemd managed files.
 
 Beispiel:
 
 - `--root /tmp/rgtest --config-dir /etc/resguard`
-- effektiver Profilpfad: `/tmp/rgtest/etc/resguard/profiles/*.yml`
+- effective profile path: `/tmp/rgtest/etc/resguard/profiles/*.yml`
 
 ## Profile Modell (aktuell)
 
@@ -40,92 +36,114 @@ Beispiel:
 - `spec.memory` (`memoryLow`, `memoryHigh`, `memoryMax`)
 - `spec.cpu` (`systemAllowedCpus`, `userAllowedCpus`, ...)
 - `spec.oomd` (`memoryPressure`, `memoryPressureLimit`)
-- `spec.classes` und kompatibel `spec.slices.classes`
+- `spec.classes` (+ compatibility `spec.slices.classes`)
 
 ## Apply Pipeline
 
-1. Profil laden (`config_dir/profiles/<name>.yml`)
-2. Validieren
-3. Plan bauen (`Action`):
-   - `EnsureDir`
-   - `WriteFile`
-   - `Exec`
-4. Bei `--dry-run`: nur Plan ausgeben
-5. Bei echtem Apply:
-   - vor jedem `WriteFile` Backup-Snapshot
-   - Writes/Exec ausführen
-   - State + Manifest schreiben
+1. load profile (`config_dir/profiles/<name>.yml`)
+2. validate
+3. build plan (`EnsureDir`, `WriteFile`, `Exec`)
+4. dry-run prints plan only
+5. real apply snapshots writes, applies actions, updates state/manifest
 
-### Generierte Dateien
+Generated managed files:
 
 - `${root}/etc/systemd/system/system.slice.d/50-resguard.conf`
 - `${root}/etc/systemd/system/user.slice.d/50-resguard.conf`
 - `${root}/etc/systemd/system/resguard-<class>.slice`
 - `${root}/etc/systemd/user/resguard-<class>.slice`
 
-### systemctl Verhalten
-
-- `systemctl daemon-reload` nur bei `root == "/"`
-- `--user-daemon-reload` (best-effort) nur bei `root == "/"` und gesetztem `SUDO_USER`:
-  - `sudo -u $SUDO_USER systemctl --user daemon-reload`
+`systemctl daemon-reload` is executed only when `root == "/"`.
 
 ## State + Backups
 
-`state_dir` enthält:
+`state_dir`:
 
 - `state.json`
 - `backups/<backup_id>/manifest.json`
-- `backups/<backup_id>/...` (gesicherte Originaldateien)
+- `backups/<backup_id>/...` (backed-up originals)
 
-`state.json` Felder:
+`state.json` fields:
 
 - `activeProfile`
 - `backupId`
 - `managedPaths`
 - `createdPaths`
 
-`backup_id` ist aktuell ein Millisekunden-Timestamp.
-
-## Rollback
-
-`rollback --last` oder `rollback --to <backup_id>`:
-
-- stellt gebackupte Dateien wieder her
-- entfernt Dateien aus `createdPaths`
-- führt `systemctl daemon-reload` nur bei `root == "/"` aus
-- setzt `state.json` auf default/leer
+Rollback restores backed-up files, removes `createdPaths`, and clears state.
 
 ## Run (`run --class`)
 
-Slice-Auflösung:
+Slice resolution:
 
-- `--slice` override
-- sonst Klasse aus Profil:
-  - via `--profile`, oder
-  - via aktivem Profil aus `state.json`
+- `--slice` override, else class from profile
+- profile source: `--profile` or `state.json.activeProfile`
 
-Voraussetzungen:
+Execution:
 
-- Slice muss existieren (`systemctl cat` bzw. `systemctl --user cat`), sonst Fehler "apply profile first"
+- root: `systemd-run --scope ...`
+- non-root: `systemd-run --user --scope ...`
+- `--wait` forwards command exit code
 
-Mode:
+## Status/Metrics/Doctor
 
-- root => system mode (`systemd-run --scope ...`)
-- non-root => user mode (`systemd-run --user --scope ...`)
+- `status`: best-effort slice/state/oomd/PSI summary
+- `metrics`: PSI + memory + slice usage snapshots
+- `doctor`: common setup diagnostics and hints
 
-`--wait`:
+---
 
-- `systemd-run --wait`
-- Exitcode des gestarteten Commands wird durchgereicht
+## Classification Model (v0.2/v0.3)
 
-## Status
+Design direction:
 
-`status` ist best-effort:
+1. wrappers-first in v0.2
+   - launcher integration via managed `.desktop` wrappers
+   - explicit class assignment per wrapper
+2. rules mapping in v0.3
+   - persistent mapping `desktop-id -> class`
+   - deterministic and user-auditable mapping updates
+3. suggestions in v0.3
+   - suggest mappings from observed usage patterns
+   - no forced auto-apply by default
 
-- liest `state.json`
-- liest `systemctl show` Props (`MemoryLow/High/Max`, `AllowedCPUs`) für `system.slice`, `user.slice`, bekannte class slices
-- versucht user-slice show (`resguard-browsers.slice`)
-- prüft `systemd-oomd` aktiv
-- liest PSI `avg60` aus `/proc/pressure/memory` und `/proc/pressure/cpu`
+Boundary:
 
-Wenn Teilinformationen fehlen: Warnungen + Exitcode `1`.
+- no daemon is required for wrapper-based classification in v0.2.
+- optional daemon hooks in v0.3 are additive, not mandatory.
+
+---
+
+## TUI Visualizer (v0.4)
+
+Planned TUI data sources:
+
+- `/proc/pressure/*` (CPU/memory/io pressure)
+- `systemctl show` (slice properties and runtime state)
+- cgroup filesystem (`/sys/fs/cgroup`) for usage hierarchy
+
+Planned behavior:
+
+- read-only observability first
+- no hidden writes from TUI
+- explicit action handoff to CLI commands for system changes
+
+---
+
+## Freeze Watchdog (v0.4, optional)
+
+Planned watchdog signals:
+
+- PSI threshold breaches over bounded windows
+- kernel/user-space stall indicators where available
+
+Planned safe panic action:
+
+- bounded temporary restriction (e.g. user.slice pressure limits)
+- cooldown and rate limiting
+- explicit audit trail and opt-in enablement
+
+Boundary:
+
+- watchdog automation is optional and begins in v0.4.
+- core resguard functionality remains daemonless and fully usable without watchdog.

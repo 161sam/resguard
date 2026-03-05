@@ -121,6 +121,10 @@ enum Commands {
         profile: Option<String>,
         #[arg(long)]
         apply: bool,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long, default_value_t = 70)]
+        confidence_threshold: u8,
     },
     Run {
         #[arg(long)]
@@ -265,6 +269,8 @@ struct Suggestion {
     memory_current: u64,
     cpu_usage_nsec: u64,
     desktop_id: Option<String>,
+    confidence: u8,
+    confidence_reason: String,
 }
 
 fn print_global_context(cli: &Cli) {
@@ -1064,16 +1070,39 @@ fn parse_first_exec_token(exec: &str) -> Option<String> {
     None
 }
 
-fn build_desktop_exec_index() -> HashMap<String, String> {
-    let mut map = HashMap::new();
+fn build_desktop_exec_index() -> HashMap<String, Vec<String>> {
+    let mut map: HashMap<String, Vec<String>> = HashMap::new();
     if let Ok(entries) = discover_desktop_entries(DesktopOrigin::All, None) {
         for item in entries {
             if let Some(bin) = parse_first_exec_token(&item.exec) {
-                map.entry(bin).or_insert(item.desktop_id);
+                let ids = map.entry(bin).or_default();
+                if !ids.iter().any(|v| v == &item.desktop_id) {
+                    ids.push(item.desktop_id);
+                }
             }
         }
     }
     map
+}
+
+fn unique_desktop_id_for_exec(
+    exec_start: &str,
+    desktop_by_exec: &HashMap<String, Vec<String>>,
+) -> Option<String> {
+    let bin = parse_first_exec_token(exec_start)?;
+    let ids = desktop_by_exec.get(&bin)?;
+    if ids.len() == 1 {
+        return ids.first().cloned();
+    }
+    None
+}
+
+#[derive(Debug, Clone)]
+struct SuggestClassification {
+    class: String,
+    reason: String,
+    pattern_match: bool,
+    memory_threshold_match: bool,
 }
 
 fn default_suggest_rules() -> Vec<SuggestRule> {
@@ -1099,25 +1128,29 @@ fn classify_scope(
     exec_start: &str,
     memory_current: u64,
     rules: &[SuggestRule],
-) -> Option<(String, String)> {
+) -> Option<SuggestClassification> {
     let hay = format!("{unit} {slice} {exec_start}");
     for rule in rules {
         if let Ok(re) = Regex::new(&rule.pattern) {
             if re.is_match(&hay) {
-                return Some((
-                    rule.class.clone(),
-                    format!("matched profile rule /{}/", rule.pattern),
-                ));
+                return Some(SuggestClassification {
+                    class: rule.class.clone(),
+                    reason: format!("matched profile rule /{}/", rule.pattern),
+                    pattern_match: true,
+                    memory_threshold_match: false,
+                });
             }
         }
     }
 
     let h = hay.to_ascii_lowercase();
     if h.contains("docker") || h.contains("podman") {
-        return Some((
-            "heavy".to_string(),
-            "container workload detected".to_string(),
-        ));
+        return Some(SuggestClassification {
+            class: "heavy".to_string(),
+            reason: "container workload detected".to_string(),
+            pattern_match: true,
+            memory_threshold_match: false,
+        });
     }
     if h.contains("code")
         || h.contains("codium")
@@ -1125,7 +1158,12 @@ fn classify_scope(
         || h.contains("pycharm")
         || h.contains("clion")
     {
-        return Some(("ide".to_string(), "IDE workload detected".to_string()));
+        return Some(SuggestClassification {
+            class: "ide".to_string(),
+            reason: "IDE workload detected".to_string(),
+            pattern_match: true,
+            memory_threshold_match: false,
+        });
     }
 
     let gib = 1024_u64.pow(3);
@@ -1135,18 +1173,47 @@ fn classify_scope(
             || h.contains("chromium")
             || h.contains("brave")
         {
-            return Some((
-                "browsers".to_string(),
-                "high-memory app.slice browser process".to_string(),
-            ));
+            return Some(SuggestClassification {
+                class: "browsers".to_string(),
+                reason: "high-memory app.slice browser process".to_string(),
+                pattern_match: true,
+                memory_threshold_match: true,
+            });
         }
-        return Some((
-            "heavy".to_string(),
-            "high-memory app.slice process".to_string(),
-        ));
+        return Some(SuggestClassification {
+            class: "heavy".to_string(),
+            reason: "high-memory app.slice process".to_string(),
+            pattern_match: false,
+            memory_threshold_match: true,
+        });
     }
 
     None
+}
+
+fn confidence_score(
+    pattern_match: bool,
+    memory_threshold_match: bool,
+    known_desktop_id: bool,
+) -> (u8, String) {
+    let mut score = 0u8;
+    let mut reasons = Vec::new();
+    if pattern_match {
+        score = score.saturating_add(40);
+        reasons.push("pattern");
+    }
+    if memory_threshold_match {
+        score = score.saturating_add(30);
+        reasons.push("memory");
+    }
+    if known_desktop_id {
+        score = score.saturating_add(30);
+        reasons.push("desktop-id");
+    }
+    if reasons.is_empty() {
+        reasons.push("none");
+    }
+    (score.min(100), reasons.join("+"))
 }
 
 fn resolve_suggest_profile(
@@ -1175,12 +1242,13 @@ fn resolve_suggest_profile(
 }
 
 fn print_suggestions_table(suggestions: &[Suggestion]) {
-    println!("scope\tclass\tdesktop_id\tmemory\treason");
+    println!("scope\tclass\tconfidence\tdesktop_id\tmemory\treason");
     for s in suggestions {
         println!(
-            "{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}",
             s.scope,
             s.class,
+            s.confidence,
             s.desktop_id.as_deref().unwrap_or("-"),
             format_bytes_human(s.memory_current),
             s.reason
@@ -1195,9 +1263,23 @@ fn handle_suggest(
     state_dir: &str,
     profile: Option<String>,
     apply: bool,
+    dry_run: bool,
+    confidence_threshold: u8,
 ) -> Result<i32> {
+    if apply && dry_run {
+        return Err(anyhow!(
+            "invalid arguments: --apply and --dry-run cannot be combined"
+        ));
+    }
+    if confidence_threshold > 100 {
+        return Err(anyhow!("invalid --confidence-threshold: must be 0..=100"));
+    }
+
     println!("command=suggest");
-    println!("apply={} profile={:?}", apply, profile);
+    println!(
+        "apply={} dry_run={} confidence_threshold={} profile={:?}",
+        apply, dry_run, confidence_threshold, profile
+    );
 
     let (resolved_profile_name, resolved_profile) =
         resolve_suggest_profile(root, config_dir, state_dir, profile.as_deref())?;
@@ -1246,24 +1328,29 @@ fn handle_suggest(
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(0);
 
-        let Some((class, reason)) =
-            classify_scope(&scope, &slice, &exec_start, memory_current, &rules)
+        let Some(classified) = classify_scope(&scope, &slice, &exec_start, memory_current, &rules)
         else {
             continue;
         };
 
-        let desktop_id =
-            parse_first_exec_token(&exec_start).and_then(|bin| desktop_by_exec.get(&bin).cloned());
+        let desktop_id = unique_desktop_id_for_exec(&exec_start, &desktop_by_exec);
+        let (confidence, confidence_reason) = confidence_score(
+            classified.pattern_match,
+            classified.memory_threshold_match,
+            desktop_id.is_some(),
+        );
 
         suggestions.push(Suggestion {
             scope,
-            class,
-            reason,
+            class: classified.class,
+            reason: classified.reason,
             slice,
             exec_start,
             memory_current,
             cpu_usage_nsec,
             desktop_id,
+            confidence,
+            confidence_reason,
         });
     }
 
@@ -1286,10 +1373,21 @@ fn handle_suggest(
         _ => print_suggestions_table(&suggestions),
     }
 
-    if apply {
+    if apply || dry_run {
         println!();
-        println!("apply_results");
+        if dry_run {
+            println!("dry_run_preview");
+        } else {
+            println!("apply_results");
+        }
         for s in &suggestions {
+            if s.confidence < confidence_threshold {
+                println!(
+                    "skip\t{}\t{}\tconfidence {} below threshold {} ({})",
+                    s.scope, s.class, s.confidence, confidence_threshold, s.confidence_reason
+                );
+                continue;
+            }
             if let Some(desktop_id) = &s.desktop_id {
                 let wrapper_path = wrapper_path_for(desktop_id, &s.class)?;
                 if wrapper_path.exists() {
@@ -1302,28 +1400,40 @@ fn handle_suggest(
                     continue;
                 }
 
-                match handle_desktop_wrap(
-                    desktop_id,
-                    &s.class,
-                    DesktopWrapOptions {
-                        force: false,
-                        dry_run: false,
-                        print_only: false,
-                        override_mode: false,
-                    },
-                ) {
-                    Ok(0) => println!("ok\t{}\t{}\twrapped", desktop_id, s.class),
-                    Ok(code) => {
-                        println!("warn\t{}\t{}\twrap returned {}", desktop_id, s.class, code)
+                if dry_run {
+                    println!(
+                        "would-wrap\t{}\t{}\tconfidence={}\tpath={}",
+                        desktop_id,
+                        s.class,
+                        s.confidence,
+                        wrapper_path.display()
+                    );
+                } else {
+                    match handle_desktop_wrap(
+                        desktop_id,
+                        &s.class,
+                        DesktopWrapOptions {
+                            force: false,
+                            dry_run: false,
+                            print_only: false,
+                            override_mode: false,
+                        },
+                    ) {
+                        Ok(0) => println!("ok\t{}\t{}\twrapped", desktop_id, s.class),
+                        Ok(code) => {
+                            println!("warn\t{}\t{}\twrap returned {}", desktop_id, s.class, code)
+                        }
+                        Err(err) => println!("warn\t{}\t{}\t{}", desktop_id, s.class, err),
                     }
-                    Err(err) => println!("warn\t{}\t{}\t{}", desktop_id, s.class, err),
                 }
             } else {
                 let profile_hint = resolved_profile_name.as_deref().unwrap_or("<profile>");
                 println!(
-                    "hint\t{}\t{}\tno desktop_id match; wrap manually: resguard desktop list --filter '{}' && resguard desktop wrap <desktop_id> --class {} (then sudo resguard apply {} --user-daemon-reload)",
+                    "hint\t{}\t{}\tno unique desktop_id match (confidence={} {}); wrap manually: resguard desktop list --filter '{}' && resguard desktop wrap <desktop_id> --class {} (then sudo resguard apply {} --user-daemon-reload)",
                     s.scope,
                     s.class,
+                    s.confidence,
+                    s.confidence_reason,
                     parse_first_exec_token(&s.exec_start).unwrap_or_else(|| s.scope.clone()),
                     s.class,
                     profile_hint
@@ -3084,8 +3194,22 @@ fn main() {
                 1
             }
         },
-        Commands::Suggest { profile, apply } => {
-            match handle_suggest(&format, &root, &config_dir, &state_dir, profile, apply) {
+        Commands::Suggest {
+            profile,
+            apply,
+            dry_run,
+            confidence_threshold,
+        } => {
+            match handle_suggest(
+                &format,
+                &root,
+                &config_dir,
+                &state_dir,
+                profile,
+                apply,
+                dry_run,
+                confidence_threshold,
+            ) {
                 Ok(code) => code,
                 Err(err) => {
                     eprintln!("suggest failed: {err}");
@@ -3633,7 +3757,7 @@ mod tests {
             3 * 1024_u64.pow(3),
             &rules,
         );
-        assert_eq!(got.map(|v| v.0), Some("browsers".to_string()));
+        assert_eq!(got.map(|v| v.class), Some("browsers".to_string()));
 
         let got2 = classify_scope(
             "app-bar.scope",
@@ -3642,7 +3766,40 @@ mod tests {
             512 * 1024_u64.pow(2),
             &rules,
         );
-        assert_eq!(got2.map(|v| v.0), Some("heavy".to_string()));
+        assert_eq!(got2.map(|v| v.class), Some("heavy".to_string()));
+    }
+
+    #[test]
+    fn confidence_score_uses_all_signals() {
+        let (s1, r1) = confidence_score(true, true, true);
+        assert_eq!(s1, 100);
+        assert!(r1.contains("pattern"));
+        assert!(r1.contains("memory"));
+        assert!(r1.contains("desktop-id"));
+
+        let (s2, _) = confidence_score(true, false, true);
+        assert_eq!(s2, 70);
+
+        let (s3, _) = confidence_score(false, true, false);
+        assert_eq!(s3, 30);
+    }
+
+    #[test]
+    fn unique_desktop_id_resolution_requires_single_match() {
+        let mut idx: HashMap<String, Vec<String>> = HashMap::new();
+        idx.insert("firefox".to_string(), vec!["firefox.desktop".to_string()]);
+        idx.insert(
+            "code".to_string(),
+            vec![
+                "code.desktop".to_string(),
+                "code-insiders.desktop".to_string(),
+            ],
+        );
+        assert_eq!(
+            unique_desktop_id_for_exec("/usr/bin/firefox %u", &idx).as_deref(),
+            Some("firefox.desktop")
+        );
+        assert!(unique_desktop_id_for_exec("code --new-window", &idx).is_none());
     }
 
     #[test]

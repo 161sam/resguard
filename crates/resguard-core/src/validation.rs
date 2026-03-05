@@ -336,15 +336,11 @@ mod tests {
             },
         };
         let errors = super::validate_profile(&profile);
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.path == "spec.suggest.rules[0].pattern")
-        );
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.path == "spec.suggest.rules[0].class")
-        );
+        assert!(errors
+            .iter()
+            .any(|e| e.path == "spec.suggest.rules[0].pattern"));
+        assert!(errors
+            .iter()
+            .any(|e| e.path == "spec.suggest.rules[0].class"));
     }
 }

@@ -16,13 +16,38 @@ use resguard_system::{
     read_pressure_1min, systemctl_cat_unit, systemctl_is_active, systemctl_show_props, systemd_run,
     write_file,
 };
+#[cfg(feature = "tui")]
+use resguard_system::{
+    parse_prop_u64, read_mem_available_bytes, read_pressure, systemctl_list_units,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::env;
+#[cfg(feature = "tui")]
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 use std::time::Duration;
+#[cfg(feature = "tui")]
+use std::time::Instant;
 use std::{collections::HashMap, fs};
+
+#[cfg(feature = "tui")]
+use crossterm::event::{self, Event, KeyCode};
+#[cfg(feature = "tui")]
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
+#[cfg(feature = "tui")]
+use crossterm::ExecutableCommand;
+#[cfg(feature = "tui")]
+use ratatui::backend::CrosstermBackend;
+#[cfg(feature = "tui")]
+use ratatui::layout::{Constraint, Direction, Layout};
+#[cfg(feature = "tui")]
+use ratatui::widgets::{Block, Borders, Cell, Gauge, Paragraph, Row, Table};
+#[cfg(feature = "tui")]
+use ratatui::Terminal;
 
 #[derive(Parser, Debug)]
 #[command(name = "resguard", about = "Linux resource guard using systemd slices")]
@@ -84,6 +109,8 @@ enum Commands {
     },
     Doctor,
     Metrics,
+    #[cfg(feature = "tui")]
+    Tui,
     Panic {
         #[arg(long, help = "Temporary panic duration like 30s, 10m, 1h")]
         duration: Option<String>,
@@ -1689,6 +1716,205 @@ fn handle_metrics() -> Result<i32> {
     Ok(if partial { 1 } else { 0 })
 }
 
+#[cfg(feature = "tui")]
+#[derive(Debug, Clone)]
+struct TuiRow {
+    unit: String,
+    memory_current: u64,
+}
+
+#[cfg(feature = "tui")]
+#[derive(Debug, Clone, Default)]
+struct TuiSnapshot {
+    cpu_avg10: Option<f64>,
+    cpu_avg60: Option<f64>,
+    mem_avg10: Option<f64>,
+    mem_avg60: Option<f64>,
+    io_avg10: Option<f64>,
+    io_avg60: Option<f64>,
+    mem_total: Option<u64>,
+    mem_available: Option<u64>,
+    user_slice_current: Option<u64>,
+    user_slice_max: Option<u64>,
+    top_units: Vec<TuiRow>,
+}
+
+#[cfg(feature = "tui")]
+fn collect_tui_snapshot() -> TuiSnapshot {
+    let mut snap = TuiSnapshot::default();
+
+    if let Ok(Some(v)) = read_pressure("/proc/pressure/cpu") {
+        snap.cpu_avg10 = Some(v.avg10);
+        snap.cpu_avg60 = Some(v.avg60);
+    }
+    if let Ok(Some(v)) = read_pressure("/proc/pressure/memory") {
+        snap.mem_avg10 = Some(v.avg10);
+        snap.mem_avg60 = Some(v.avg60);
+    }
+    if let Ok(Some(v)) = read_pressure("/proc/pressure/io") {
+        snap.io_avg10 = Some(v.avg10);
+        snap.io_avg60 = Some(v.avg60);
+    }
+
+    snap.mem_total = read_mem_total_bytes().ok();
+    snap.mem_available = read_mem_available_bytes().ok();
+
+    if let Ok(props) = systemctl_show_props(false, "user.slice", &["MemoryCurrent", "MemoryMax"]) {
+        snap.user_slice_current = parse_prop_u64(&props, "MemoryCurrent");
+        snap.user_slice_max = parse_prop_u64(&props, "MemoryMax");
+    }
+
+    let mut units = Vec::new();
+    for unit_type in ["slice", "scope"] {
+        if let Ok(list) = systemctl_list_units(false, unit_type) {
+            for unit in list {
+                if !unit.ends_with(".slice") && !unit.ends_with(".scope") {
+                    continue;
+                }
+                if let Ok(props) = systemctl_show_props(false, &unit, &["MemoryCurrent"]) {
+                    if let Some(cur) = parse_prop_u64(&props, "MemoryCurrent") {
+                        if cur > 0 {
+                            units.push(TuiRow {
+                                unit,
+                                memory_current: cur,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    units.sort_by(|a, b| b.memory_current.cmp(&a.memory_current));
+    units.dedup_by(|a, b| a.unit == b.unit);
+    snap.top_units = units.into_iter().take(10).collect();
+
+    snap
+}
+
+#[cfg(feature = "tui")]
+fn opt_f64(v: Option<f64>) -> String {
+    v.map(|x| format!("{x:.2}"))
+        .unwrap_or_else(|| "-".to_string())
+}
+
+#[cfg(feature = "tui")]
+fn opt_bytes(v: Option<u64>) -> String {
+    v.map(format_bytes_human).unwrap_or_else(|| "-".to_string())
+}
+
+#[cfg(feature = "tui")]
+fn handle_tui() -> Result<i32> {
+    println!("command=tui");
+
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    stdout.execute(EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let result = (|| -> Result<i32> {
+        let tick = Duration::from_secs(1);
+        let mut last = Instant::now()
+            .checked_sub(tick)
+            .unwrap_or_else(Instant::now);
+
+        loop {
+            if last.elapsed() >= tick {
+                let snapshot = collect_tui_snapshot();
+                terminal.draw(|f| {
+                    let area = f.area();
+                    let layout = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([
+                            Constraint::Length(5),
+                            Constraint::Length(4),
+                            Constraint::Length(3),
+                            Constraint::Min(8),
+                        ])
+                        .split(area);
+
+                    let psi_text = format!(
+                        "CPU avg10={} avg60={}   MEM avg10={} avg60={}   IO avg10={} avg60={}",
+                        opt_f64(snapshot.cpu_avg10),
+                        opt_f64(snapshot.cpu_avg60),
+                        opt_f64(snapshot.mem_avg10),
+                        opt_f64(snapshot.mem_avg60),
+                        opt_f64(snapshot.io_avg10),
+                        opt_f64(snapshot.io_avg60)
+                    );
+                    let psi = Paragraph::new(psi_text)
+                        .block(Block::default().borders(Borders::ALL).title("PSI"));
+                    f.render_widget(psi, layout[0]);
+
+                    let mem_text = format!(
+                        "MemTotal={}  MemAvailable={}  user.slice MemoryCurrent={}  MemoryMax={}",
+                        opt_bytes(snapshot.mem_total),
+                        opt_bytes(snapshot.mem_available),
+                        opt_bytes(snapshot.user_slice_current),
+                        opt_bytes(snapshot.user_slice_max)
+                    );
+                    let mem = Paragraph::new(mem_text)
+                        .block(Block::default().borders(Borders::ALL).title("Memory"));
+                    f.render_widget(mem, layout[1]);
+
+                    let ratio = match (snapshot.user_slice_current, snapshot.user_slice_max) {
+                        (Some(cur), Some(max)) if max > 0 => {
+                            (cur as f64 / max as f64).clamp(0.0, 1.0)
+                        }
+                        _ => 0.0,
+                    };
+                    let gauge = Gauge::default()
+                        .block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .title("user.slice usage"),
+                        )
+                        .ratio(ratio)
+                        .label(format!("{:.0}%", ratio * 100.0));
+                    f.render_widget(gauge, layout[2]);
+
+                    let rows: Vec<Row> = snapshot
+                        .top_units
+                        .iter()
+                        .map(|r| {
+                            Row::new(vec![
+                                Cell::from(r.unit.clone()),
+                                Cell::from(format_bytes_human(r.memory_current)),
+                            ])
+                        })
+                        .collect();
+                    let table = Table::new(
+                        rows,
+                        [Constraint::Percentage(70), Constraint::Percentage(30)],
+                    )
+                    .header(Row::new(vec!["unit", "memory"]))
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title("Top scopes/slices by MemoryCurrent (q to quit)"),
+                    );
+                    f.render_widget(table, layout[3]);
+                })?;
+                last = Instant::now();
+            }
+
+            if event::poll(Duration::from_millis(100))? {
+                if let Event::Key(key) = event::read()? {
+                    if matches!(key.code, KeyCode::Char('q') | KeyCode::Char('Q')) {
+                        return Ok(0);
+                    }
+                }
+            }
+        }
+    })();
+
+    let _ = disable_raw_mode();
+    let _ = terminal.backend_mut().execute(LeaveAlternateScreen);
+    let _ = terminal.show_cursor();
+
+    result
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct DesktopListItem {
     desktop_id: String,
@@ -2533,6 +2759,14 @@ fn main() {
             Ok(code) => code,
             Err(err) => {
                 eprintln!("metrics failed: {err}");
+                1
+            }
+        },
+        #[cfg(feature = "tui")]
+        Commands::Tui => match handle_tui() {
+            Ok(code) => code,
+            Err(err) => {
+                eprintln!("tui failed: {err}");
                 1
             }
         },

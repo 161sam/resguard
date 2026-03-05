@@ -4,6 +4,12 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PressureSnapshot {
+    pub avg10: f64,
+    pub avg60: f64,
+}
+
 pub fn daemon_reload() -> Result<()> {
     Command::new("systemctl").arg("daemon-reload").status()?;
 
@@ -103,17 +109,87 @@ pub fn systemctl_is_active(unit: &str) -> Result<bool> {
 }
 
 pub fn read_pressure_1min(path: &str) -> Result<Option<f64>> {
+    Ok(read_pressure(path)?.map(|p| p.avg60))
+}
+
+pub fn read_pressure(path: &str) -> Result<Option<PressureSnapshot>> {
     let s = fs::read_to_string(path)?;
     for line in s.lines() {
-        if line.starts_with("some ") {
-            for tok in line.split_whitespace() {
-                if let Some(v) = tok.strip_prefix("avg60=") {
-                    return Ok(Some(v.parse()?));
-                }
+        if !line.starts_with("some ") {
+            continue;
+        }
+        let mut avg10 = None;
+        let mut avg60 = None;
+        for tok in line.split_whitespace() {
+            if let Some(v) = tok.strip_prefix("avg10=") {
+                avg10 = Some(v.parse()?);
+            } else if let Some(v) = tok.strip_prefix("avg60=") {
+                avg60 = Some(v.parse()?);
             }
+        }
+        if let (Some(a10), Some(a60)) = (avg10, avg60) {
+            return Ok(Some(PressureSnapshot {
+                avg10: a10,
+                avg60: a60,
+            }));
         }
     }
     Ok(None)
+}
+
+pub fn read_mem_available_bytes() -> Result<u64> {
+    let content = fs::read_to_string("/proc/meminfo")?;
+    for line in content.lines() {
+        if let Some(rest) = line.strip_prefix("MemAvailable:") {
+            let parts: Vec<&str> = rest.split_whitespace().collect();
+            let kb: u64 = parts
+                .first()
+                .ok_or_else(|| anyhow!("MemAvailable parse failed"))?
+                .parse()?;
+            return kb
+                .checked_mul(1024)
+                .ok_or_else(|| anyhow!("MemAvailable overflow"));
+        }
+    }
+    Err(anyhow!("MemAvailable not found in /proc/meminfo"))
+}
+
+pub fn systemctl_list_units(user: bool, unit_type: &str) -> Result<Vec<String>> {
+    let mut cmd = Command::new("systemctl");
+    if user {
+        cmd.arg("--user");
+    }
+    let out = cmd
+        .args([
+            "list-units",
+            "--type",
+            unit_type,
+            "--all",
+            "--no-legend",
+            "--no-pager",
+        ])
+        .output()?;
+    if !out.status.success() {
+        return Err(anyhow!(
+            "systemctl list-units failed (user={}, type={}): {}",
+            user,
+            unit_type,
+            out.status
+        ));
+    }
+    let mut out_units = Vec::new();
+    for line in String::from_utf8_lossy(&out.stdout).lines() {
+        if let Some(unit) = line.split_whitespace().next() {
+            if !unit.is_empty() {
+                out_units.push(unit.to_string());
+            }
+        }
+    }
+    Ok(out_units)
+}
+
+pub fn parse_prop_u64(props: &BTreeMap<String, String>, key: &str) -> Option<u64> {
+    props.get(key).and_then(|v| v.parse::<u64>().ok())
 }
 
 pub fn read_mem_total_bytes() -> Result<u64> {
@@ -164,7 +240,9 @@ pub fn is_root_user() -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::default_reserve_bytes;
+    use super::{default_reserve_bytes, read_pressure, PressureSnapshot};
+    use std::fs;
+    use tempfile::NamedTempFile;
 
     #[test]
     fn reserve_heuristic_matches_expected_buckets() {
@@ -173,5 +251,20 @@ mod tests {
         assert_eq!(default_reserve_bytes(16 * gb), 2 * gb);
         assert_eq!(default_reserve_bytes(32 * gb), 4 * gb);
         assert_eq!(default_reserve_bytes(64 * gb), 6 * gb);
+    }
+
+    #[test]
+    fn parse_pressure_snapshot_from_some_line() {
+        let file = NamedTempFile::new().expect("tmp");
+        let content = "some avg10=1.23 avg60=4.56 avg300=0.00 total=1\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n";
+        fs::write(file.path(), content).expect("write");
+        let got = read_pressure(file.path().to_str().expect("path")).expect("read");
+        assert_eq!(
+            got,
+            Some(PressureSnapshot {
+                avg10: 1.23,
+                avg60: 4.56
+            })
+        );
     }
 }

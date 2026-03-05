@@ -18,7 +18,7 @@ use resguard_system::{
 use std::collections::BTreeMap;
 use std::env;
 use std::path::{Path, PathBuf};
-use std::process;
+use std::process::{self, Command};
 
 #[derive(Parser, Debug)]
 #[command(name = "resguard", about = "Linux resource guard using systemd slices")]
@@ -309,20 +309,43 @@ fn execute_action(action: &Action) -> Result<()> {
         Action::Exec {
             program,
             args,
+            env,
             best_effort,
-        } => {
-            let status = exec_command(program, args)?;
-            if status.success() || *best_effort {
-                Ok(())
-            } else {
-                Err(anyhow!(
-                    "external command failed: {} {} (status={})",
-                    program,
-                    args.join(" "),
-                    status
-                ))
+        } => match exec_command(program, args, env) {
+            Ok(status) => {
+                if status.success() {
+                    Ok(())
+                } else if *best_effort {
+                    eprintln!(
+                        "warn: best-effort command failed: {} {} (status={})",
+                        program,
+                        args.join(" "),
+                        status
+                    );
+                    Ok(())
+                } else {
+                    Err(anyhow!(
+                        "external command failed: {} {} (status={})",
+                        program,
+                        args.join(" "),
+                        status
+                    ))
+                }
             }
-        }
+            Err(err) => {
+                if *best_effort {
+                    eprintln!(
+                        "warn: best-effort command failed to execute: {} {} ({})",
+                        program,
+                        args.join(" "),
+                        err
+                    );
+                    Ok(())
+                } else {
+                    Err(err)
+                }
+            }
+        },
     }
 }
 
@@ -332,8 +355,19 @@ fn print_plan(actions: &[Action]) {
         match action {
             Action::EnsureDir { path } => println!("  ensure_dir\t{}", path.display()),
             Action::WriteFile { path, .. } => println!("  write_file\t{}", path.display()),
-            Action::Exec { program, args, .. } => {
-                println!("  exec\t{} {}", program, args.join(" "));
+            Action::Exec {
+                program, args, env, ..
+            } => {
+                if env.is_empty() {
+                    println!("  exec\t{} {}", program, args.join(" "));
+                } else {
+                    let env_rendered = env
+                        .iter()
+                        .map(|(k, v)| format!("{k}={v}"))
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    println!("  exec\t{} {} {}", env_rendered, program, args.join(" "));
+                }
             }
         }
     }
@@ -341,7 +375,11 @@ fn print_plan(actions: &[Action]) {
 
 fn maybe_daemon_reload_for_root(root: &str) -> Result<()> {
     if root == "/" {
-        let status = exec_command("systemctl", &["daemon-reload".to_string()])?;
+        let status = exec_command(
+            "systemctl",
+            &["daemon-reload".to_string()],
+            &std::collections::BTreeMap::new(),
+        )?;
         if !status.success() {
             return Err(anyhow!(
                 "systemctl daemon-reload failed with status {status}"
@@ -349,6 +387,38 @@ fn maybe_daemon_reload_for_root(root: &str) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn resolve_user_runtime_dir(user: &str) -> Option<String> {
+    let loginctl_output = Command::new("loginctl")
+        .arg("show-user")
+        .arg(user)
+        .arg("-p")
+        .arg("RuntimePath")
+        .arg("--value")
+        .output()
+        .ok();
+
+    if let Some(out) = loginctl_output {
+        if out.status.success() {
+            let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !v.is_empty() {
+                return Some(v);
+            }
+        }
+    }
+
+    let id_output = Command::new("id").arg("-u").arg(user).output().ok()?;
+    if !id_output.status.success() {
+        return None;
+    }
+    let uid = String::from_utf8_lossy(&id_output.stdout)
+        .trim()
+        .to_string();
+    if uid.is_empty() {
+        return None;
+    }
+    Some(format!("/run/user/{uid}"))
 }
 
 fn handle_apply(
@@ -399,6 +469,25 @@ fn handle_apply(
             Some(value)
         }
     });
+    let sudo_runtime_dir = sudo_user.as_deref().and_then(resolve_user_runtime_dir);
+
+    if opts.user_daemon_reload && root == "/" {
+        if let Some(user) = &sudo_user {
+            if sudo_runtime_dir.is_none() {
+                println!(
+                    "hint=could not resolve XDG_RUNTIME_DIR for {}; will try plain sudo --user reload",
+                    user
+                );
+                println!("hint=if this fails, run in user session: systemctl --user daemon-reload");
+            }
+        } else {
+            println!("hint=--user-daemon-reload requested but SUDO_USER is not set");
+            println!("hint=run in user session: systemctl --user daemon-reload");
+        }
+    } else if opts.user_daemon_reload && root != "/" {
+        println!("hint=--user-daemon-reload skipped because --root is not '/' (test root mode)");
+    }
+
     let plan = build_apply_plan(
         &profile,
         Path::new(root),
@@ -408,6 +497,7 @@ fn handle_apply(
             no_classes: opts.no_classes,
             user_daemon_reload: opts.user_daemon_reload,
             sudo_user,
+            sudo_runtime_dir,
         },
     );
 
@@ -448,10 +538,6 @@ fn handle_apply(
     let manifest = manifest_from_transaction(&tx, Some(profile_name.to_string()));
     write_backup_manifest(&rooted_state_dir, &manifest)?;
     write_state(&rooted_state_dir, &state_from_manifest(&manifest))?;
-
-    if opts.user_daemon_reload && root == "/" && env::var("SUDO_USER").is_err() {
-        println!("hint=--user-daemon-reload requested but SUDO_USER is not set; skipped");
-    }
 
     println!("result=ok");
     Ok(0)

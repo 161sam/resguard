@@ -23,8 +23,12 @@ pub fn ensure_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn exec_command(program: &str, args: &[String]) -> Result<std::process::ExitStatus> {
-    let status = Command::new(program).args(args).status()?;
+pub fn exec_command(
+    program: &str,
+    args: &[String],
+    envs: &std::collections::BTreeMap<String, String>,
+) -> Result<std::process::ExitStatus> {
+    let status = Command::new(program).args(args).envs(envs).status()?;
     Ok(status)
 }
 

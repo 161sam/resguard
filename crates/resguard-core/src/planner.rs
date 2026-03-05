@@ -14,6 +14,7 @@ pub enum Action {
     Exec {
         program: String,
         args: Vec<String>,
+        env: BTreeMap<String, String>,
         best_effort: bool,
     },
 }
@@ -25,6 +26,7 @@ pub struct PlanOptions {
     pub no_classes: bool,
     pub user_daemon_reload: bool,
     pub sudo_user: Option<String>,
+    pub sudo_runtime_dir: Option<String>,
 }
 
 const MANAGED_HEADER: &str = "# Managed by resguard. DO NOT EDIT.";
@@ -159,20 +161,24 @@ pub fn build_apply_plan(profile: &Profile, root: &Path, options: &PlanOptions) -
         actions.push(Action::Exec {
             program: "systemctl".to_string(),
             args: vec!["daemon-reload".to_string()],
+            env: BTreeMap::new(),
             best_effort: false,
         });
 
         if options.user_daemon_reload {
             if let Some(user) = &options.sudo_user {
+                let mut args = vec!["-u".to_string(), user.clone()];
+                if let Some(runtime_dir) = &options.sudo_runtime_dir {
+                    args.push("env".to_string());
+                    args.push(format!("XDG_RUNTIME_DIR={runtime_dir}"));
+                }
+                args.push("systemctl".to_string());
+                args.push("--user".to_string());
+                args.push("daemon-reload".to_string());
                 actions.push(Action::Exec {
                     program: "sudo".to_string(),
-                    args: vec![
-                        "-u".to_string(),
-                        user.clone(),
-                        "systemctl".to_string(),
-                        "--user".to_string(),
-                        "daemon-reload".to_string(),
-                    ],
+                    args,
+                    env: BTreeMap::new(),
                     best_effort: true,
                 });
             }

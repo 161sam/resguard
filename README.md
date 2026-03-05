@@ -107,6 +107,7 @@ Non-interactive Fallback:
 - [CLI](docs/cli.md)
 - [Design](docs/design.md)
 - [Safety](docs/safety.md)
+- [Threat Model](docs/threat-model.md)
 - [Profiles](docs/profiles.md)
 - [Releases](docs/releases.md)
 

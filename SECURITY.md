@@ -3,157 +3,130 @@
 
 ## Overview
 
-Resguard modifies systemd slice configuration and therefore influences system resource limits.
+Resguard modifies systemd resource controls and can optionally run `resguardd` (freeze watchdog).
+Security and safety are core design constraints:
 
-Misconfiguration could affect system stability.
+- explicit system changes
+- rollback/revert first
+- minimal privileges and hardening by default
 
-Security and safety are core design principles.
-
----
-
-# Supported Versions
+## Supported Versions
 
 Currently supported:
 
 | Version | Supported |
 |-------|--------|
-0.1 | yes
+| 0.2.x | yes |
 
----
+## Reporting Security Issues
 
-# Reporting Security Issues
-
-Please report security issues privately.
-
-Email:
-
-security@resguard.dev
+Please report security issues privately to `security@resguard.dev`.
 
 Include:
 
 - affected version
 - reproduction steps
-- logs if possible
+- relevant logs
 
 Do not open public issues for security vulnerabilities.
 
----
+## Threat Model
 
-# Threat Model
+Assumptions:
 
-Resguard assumes:
+- attacker may control user processes and workload behavior
+- attacker may attempt CPU/memory pressure exhaustion
+- attacker may try to trigger unsafe watchdog actions repeatedly
 
-- attacker may control user processes
-- attacker may attempt to exhaust system resources
-- attacker may attempt to bypass slice limits
+Security goals:
 
-Goals:
+- preserve system responsiveness
+- keep privileged services operational
+- keep actions auditable and reversible
 
-- system must remain responsive
-- privileged system services must remain operational
-- resource exhaustion must be contained
+See [docs/threat-model.md](docs/threat-model.md) for concrete boundaries.
 
----
+## Attack Surfaces and Controls
 
-# Attack Surfaces
+### Profile and Config Files
 
-### Profile Files
+Inputs include profile YAML and daemon YAML.
 
-Profiles are YAML.
+Controls:
 
-Risk:
+- strict parsing/validation
+- bounded numeric values in daemon config:
+  - `memory_avg10_threshold`, `cpu_avg10_threshold` in `(0,100]`
+  - `hold_seconds`, `cooldown_seconds`, `action_duration_seconds` > `0`
+  - `poll_interval_ms >= 200`
+- action type restricted to known enum values (`panic`, `set-property`)
 
-- malformed profiles
+### Command Execution
 
-Mitigation:
+Resguard executes `systemctl`, `systemd-run`, and (for watchdog panic) `resguard panic`.
 
-- strict validation
-- schema checks
+Controls:
 
----
-
-### Systemd Interaction
-
-Resguard executes:
-
-```
-
-systemctl
-systemd-run
-
-```
-
-Risk:
-
-- command injection
-
-Mitigation:
-
-- arguments never interpolated into shell
-- commands executed directly via exec
-
----
+- direct command execution (no `sh -c` / `bash -c`)
+- fixed command names and explicit arguments
+- no shell interpolation of untrusted input
 
 ### File Writes
 
-Resguard writes to:
+Resguard writes only managed paths and state files (including daemon ledger):
 
-```
+- `/etc/systemd/system/...` and `/etc/systemd/user/...` managed units/drop-ins
+- `/var/lib/resguard/...` state/backup files
+- `/var/lib/resguard/daemon-ledger.jsonl` (or configured `--state-dir`)
 
-/etc/systemd/system/
+Controls:
 
-```
+- transactional apply model for profile changes
+- backups + manifests + rollback
+- no overwrite of unrelated files
 
-Risk:
+### Daemon Surface (`resguardd`)
 
-- overwrite unrelated configuration
+`resguardd` is optional and not auto-enabled by packaging.
 
-Mitigation:
+Service hardening includes:
 
-- only files prefixed with resguard
-- explicit managed markers
+- `NoNewPrivileges=true`
+- `ProtectSystem=strict`
+- `ProtectHome=true`
+- `PrivateTmp=true`
+- `CapabilityBoundingSet=`
+- `RestrictAddressFamilies=AF_UNIX`
+- `LockPersonality=true`
+- `MemoryDenyWriteExecute=true`
 
----
+## Action Restrictions and Revert Guarantees
 
-# Privilege Model
+Watchdog action restrictions:
 
-Commands requiring root:
+- finite cooldown and hold gating to avoid action thrash
+- `--once` mode for single-cycle decision tests without long-running daemon
 
-- apply
-- rollback
+Revert behavior:
 
-Commands not requiring root:
+- `set-property` action stores prior `MemoryHigh/MemoryMax` and reverts after duration
+- on SIGINT/SIGTERM during active `set-property` window, daemon attempts early revert before exit
+- ledger records include `revert_ok` for auditability
 
-- profile commands
-- status
-- run (if slice exists)
+## Privilege Model
 
----
+Commands requiring root (system scope):
 
-# Denial of Service
+- `apply`
+- `rollback`
+- `panic`
 
-Worst case:
+Daemon behavior depends on systemd property writes and is expected to run with sufficient privileges.
 
-- misconfigured memory limits
+## Responsible Use
 
-Mitigation:
+Before applying on production systems:
 
-- dry-run
-- validation
-- rollback
-
----
-
-# Responsible Use
-
-Resguard should be used carefully on production systems.
-
-Always test profiles with:
-
-```
-
-resguard apply <profile> --dry-run
-
-```
-
-before applying.
+1. `resguard apply <profile> --dry-run`
+2. `resguard setup --suggest` (preview wrappers/suggestions)
+3. review rollback path: `resguard rollback --last`

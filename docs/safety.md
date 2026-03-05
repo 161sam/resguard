@@ -1,158 +1,82 @@
+# Resguard Safety Model (v0.1)
 
-# Resguard Safety Model
+Resguard verändert systemd-Konfiguration. Daher ist Safety zentral.
 
-Resguard verändert systemd slices.
+## Sicherheitsprinzipien
 
-Fehlkonfiguration könnte theoretisch:
-
-- Performance reduzieren
-- Prozesse unerwartet limitieren
-
-Deshalb ist Safety ein zentraler Bestandteil.
-
----
-
-# Sicherheitsprinzipien
-
-1. **Dry-Run First**
-2. **Atomic Writes**
-3. **Backups vor jeder Änderung**
-4. **Rollback jederzeit möglich**
-5. **Alle Dateien klar als Managed markiert**
+1. Dry-run vor Writes
+2. Backups vor jedem File-Write
+3. State + Manifest für nachvollziehbare Rollbacks
+4. Best-effort automatische Rücknahme bei Apply-Fehlern
 
 ---
 
-# Dry Run
+## Dry Run
 
 ```bash
 resguard apply workstation --dry-run
-````
+```
 
-Zeigt:
-
-* betroffene Dateien
-* Änderungen
-* diff output
-
-Ohne Änderungen am System.
+Zeigt den Plan (`ensure_dir`, `write_file`, `exec`) und schreibt nichts.
 
 ---
 
-# Backups
+## State + Backup Layout
 
-Vor jeder Änderung werden Dateien gesichert.
+Standardpfad (anpassbar via `--state-dir`):
 
-Pfad:
+- `state.json`: `/var/lib/resguard/state.json`
+- Backups: `/var/lib/resguard/backups/<backup_id>/...`
+- Manifest pro Apply: `/var/lib/resguard/backups/<backup_id>/manifest.json`
 
-```
-/var/lib/resguard/backups/<timestamp>/
-```
+`<backup_id>` ist aktuell ein Millisekunden-Timestamp.
 
-Beispiel:
-
-```
-/var/lib/resguard/backups/2026-03-05T14-00/
-```
+Mit `--root /tmp/rg` werden Pfade isoliert unter `/tmp/rg/...` geschrieben.
 
 ---
 
-# Rollback
+## Was wird gespeichert?
 
-Rollback stellt vorherigen Zustand wieder her.
+`state.json` enthält:
 
-```bash
-resguard rollback
-```
+- `activeProfile`
+- `backupId`
+- `managedPaths`
+- `createdPaths`
 
-Oder:
+`manifest.json` enthält denselben Snapshot pro Backup-ID.
 
-```bash
-resguard rollback --to 2026-03-05T14-00
-```
+---
+
+## Rollback-Verhalten (exakt)
 
 Rollback stellt wieder her:
 
-* systemd drop-ins
-* slice units
-* state file
+- alle Dateien, die vor Apply bereits existierten und gesichert wurden
 
-Danach:
+Rollback entfernt:
 
-```
-systemctl daemon-reload
-```
+- alle Dateien, die im Apply neu erstellt wurden (`createdPaths`)
 
----
+Zusätzlich:
 
-# Recovery ohne resguard
-
-Falls resguard selbst beschädigt ist.
-
-Manuell:
-
-```
-rm /etc/systemd/system/user.slice.d/50-resguard.conf
-rm /etc/systemd/system/system.slice.d/50-resguard.conf
-rm /etc/systemd/system/resguard-*.slice
-
-systemctl daemon-reload
-```
+- `systemctl daemon-reload` nur bei `--root /`
+- `state.json` wird nach erfolgreichem Rollback auf default/leer gesetzt
 
 ---
 
-# Safe Defaults
+## Apply-Fehler
 
-Profiles werden validiert.
+Wenn ein Apply-Schritt fehlschlägt:
 
-Checks:
-
-* MemoryMax >= MemoryHigh
-* CPU Sets gültig
-* Slice Namen korrekt
-* keine ungültigen Units
+- Resguard versucht automatisch Rollback für die aktuelle Transaktion
+- Exit `4`: Apply fehlgeschlagen, Rollback-Versuch durchgeführt
+- Exit `5`: Rollback selbst fehlgeschlagen
 
 ---
 
-# Failure Modes
+## Rechte / Root
 
-### Systemctl fehlgeschlagen
+Bei `--root /` gelten Root-Anforderungen für systemweite Änderungen.
 
-resguard bricht ab und versucht rollback.
-
----
-
-### Teilweise Apply
-
-resguard erkennt unvollständige Writes via state file.
-
-Rollback möglich.
-
----
-
-### OOMD Konflikte
-
-resguard setzt nur:
-
-```
-ManagedOOMMemoryPressure
-```
-
-Es überschreibt keine fremden OOM-Konfigurationen.
-
----
-
-# Logging
-
-Verbose Mode:
-
-```
-resguard --verbose apply workstation
-```
-
-zeigt:
-
-* systemctl commands
-* file writes
-* diffs
-
-Keine sensiblen Daten werden geloggt.
+Bei Test-Roots (`--root /tmp/...`) können Writes ohne Root geprüft werden, ohne echtes systemd zu verändern.

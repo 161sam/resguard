@@ -1,277 +1,92 @@
-
 # Resguard
 
-**Resguard** ist ein natives Linux-Systemtool zur **Ressourcen-Isolation und System-Stabilisierung**.
+Resguard ist ein natives Linux-Tool für Ressourcen-Isolation mit systemd slices und cgroups v2.
 
-Es schützt dein System davor, durch RAM/CPU-intensive Anwendungen (Browser, IDEs, Container etc.) unbedienbar zu werden.
+## Aktueller Stand (v0.1)
 
-Resguard reserviert Ressourcen für das Betriebssystem und organisiert Anwendungen in **systemd slices**.
+Implementiert:
 
-Das Ziel:
+- Profilschema + Validation
+- `init`, `apply`, `rollback`, `run`, `status`
+- `--root`-Isolation für sichere Testläufe ohne `/etc` zu ändern
+- State/Backup/Manifest für Rollback
 
-> Selbst unter extremer Last bleibt dein System **reaktionsfähig**.
+Teilweise implementiert / Stub:
 
----
-
-# Features
-
-- RAM-Reservierung für das Betriebssystem
-- CPU-Core Isolation
-- systemd slice Management
-- Workload-Klassen (browser / ide / heavy)
-- Profile-basierte Konfiguration
-- Dry-run Modus
-- Rollback Support
-- System Status Diagnose
-- Workloads direkt in slices starten
-
----
-
-# Warum Resguard?
-
-Typisches Szenario:
-
-- Browser öffnet 50 Tabs
-- IDE indexiert ein großes Projekt
-- Docker startet mehrere Container
-
-RAM und CPU sind ausgelastet.
-
-➡️ Der Desktop friert ein.  
-➡️ Terminal lässt sich nicht mehr öffnen.
-
-Mit Resguard:
-
-- OS hat reservierte Ressourcen
-- user workloads sind begrenzt
-- System bleibt bedienbar
-
----
-
-# Installation
-
-## Voraussetzungen
-
-- Linux (systemd + cgroups v2)
-- Rust 1.75+
-
-Ubuntu:
-
-```bash
-sudo apt install build-essential
-````
-
----
+- `diff`
+- `profile list/show/import/export/new/edit`
 
 ## Build
 
 ```bash
-git clone https://github.com/yourorg/resguard
-cd resguard
-cargo build --release
+cargo build
 ```
 
-Binary:
+## Quickstart ohne sudo (`--root` Demo)
 
-```
-target/release/resguard
-```
-
-Installieren:
+Die folgenden Schritte schreiben nur unter `/tmp/rgdemo`.
 
 ```bash
-sudo cp target/release/resguard /usr/local/bin/
+# 1) Profil automatisch erzeugen
+cargo run -p resguard -- init --name demo --out /etc/resguard/profiles/demo.yml --root /tmp/rgdemo
+
+# 2) Plan ansehen (keine Writes)
+cargo run -p resguard -- apply demo --dry-run --root /tmp/rgdemo
+
+# 3) Anwenden in isoliertem Root
+cargo run -p resguard -- apply demo --root /tmp/rgdemo
+
+# 4) Ergebnis prüfen
+find /tmp/rgdemo/etc/systemd -type f | sort
+
+# 5) Rollback
+cargo run -p resguard -- rollback --last --root /tmp/rgdemo
 ```
 
----
+Hinweis:
 
-# Quick Start
+- Bei `--root /tmp/...` wird **kein** `systemctl daemon-reload` ausgeführt.
 
-### Profil erstellen
+## Wichtige Pfade
+
+Defaults:
+
+- Config dir: `/etc/resguard`
+- State dir: `/var/lib/resguard`
+
+Mit `--root /tmp/rg` werden daraus:
+
+- `/tmp/rg/etc/resguard`
+- `/tmp/rg/var/lib/resguard`
+
+State/Backups:
+
+- `${state_dir}/state.json`
+- `${state_dir}/backups/<backup_id>/manifest.json`
+- `${state_dir}/backups/<backup_id>/...` (gesicherte Dateien)
+
+## `run --class` Voraussetzungen
+
+`run` benötigt entweder:
+
+- ein aktives Profil in `state.json` (nach `apply`), oder
+- `--profile <name>`
+
+Zusätzlich muss die Slice existieren (Check via `systemctl cat` bzw. `systemctl --user cat`).
+Wenn nicht, bricht `run` mit Hinweis "apply profile first" ab.
+
+## Status
+
+`status` arbeitet best-effort und kann ohne root ausgeführt werden.
+Bei teilweise fehlenden Informationen gibt der Command Warnungen aus und endet mit Exitcode `1`.
 
 ```bash
-resguard profile new workstation
+cargo run -p resguard -- status
 ```
 
-### Profil anwenden
+## Weitere Doku
 
-```bash
-sudo resguard apply workstation
-```
-
-### Status prüfen
-
-```bash
-resguard status
-```
-
----
-
-# Workloads starten
-
-Beispiel:
-
-```bash
-resguard run --class browsers -- firefox
-```
-
-Intern:
-
-```
-systemd-run --scope -p Slice=resguard-browsers.slice firefox
-```
-
----
-
-# Dry Run
-
-Zeigt Änderungen ohne sie anzuwenden.
-
-```bash
-resguard apply workstation --dry-run
-```
-
----
-
-# Rollback
-
-```bash
-sudo resguard rollback
-```
-
----
-
-# Beispielprofile
-
-Im Ordner:
-
-```
-docs/examples/
-```
-
-Beispiele:
-
-* workstation-16g.yml
-* workstation-32g.yml
-* dev-docker-heavy.yml
-
----
-
-# CLI Übersicht
-
-```
-resguard profile list
-resguard profile show <name>
-
-resguard apply <profile>
-resguard diff <profile>
-resguard rollback
-
-resguard status
-
-resguard run --class <class> -- <command>
-```
-
----
-
-# Demo
-
-Example workflow:
-
-```bash
-resguard profile new workstation
-resguard apply workstation
-resguard run --class browsers -- firefox
-```
-
-Terminal Output:
-
-```
-✔ Profile applied
-✔ systemd daemon reloaded
-✔ slices active
-```
-
----
-
-# Architektur
-
-Resguard basiert auf:
-
-* systemd slices
-* cgroups v2
-* systemd-oomd
-
-Resguard schreibt nur:
-
-```
-/etc/systemd/system/*.slice
-/etc/systemd/system/*.slice.d/
-```
-
-Alle Änderungen sind:
-
-* versioniert
-* rollbackbar
-* klar markiert
-
----
-
-# Sicherheit
-
-Resguard verändert systemd Ressourcenlimits.
-
-Alle Änderungen:
-
-* können per Dry-Run geprüft werden
-* werden vor dem Schreiben gesichert
-* können per Rollback rückgängig gemacht werden
-
-Weitere Details:
-
-```
-docs/safety.md
-SECURITY.md
-```
-
----
-
-# Projektstruktur
-
-```
-crates/
-  resguard-cli
-  resguard-core
-  resguard-system
-  resguard-config
-  resguard-state
-```
-
----
-
-# Roadmap
-
-### v0.1
-
-* Profile
-* Apply
-* Rollback
-* run --class
-
-### v0.2
-
-* Rules Engine
-* Rescue Mode
-* Inspect Tools
-
-### v0.3
-
-* Desktop Integration
-* Event Watcher
-* Monitoring
-
----
-
-# License
-
-MIT License
+- [CLI](docs/cli.md)
+- [Design](docs/design.md)
+- [Safety](docs/safety.md)
+- [Profiles](docs/profiles.md)

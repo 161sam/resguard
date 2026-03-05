@@ -1,261 +1,190 @@
-
-# Resguard CLI Spec (v0.1)
+# Resguard CLI Spec (v0.1, implemented behavior)
 
 ## Allgemein
 Binary: `resguard`
 
 ### Globale Flags
+Die folgenden Flags sind global und funktionieren vor oder nach dem Subcommand:
+
 - `--format <table|json|yaml>` (default: `table`)
-- `--verbose` (mehr Logs)
-- `--quiet` (nur Fehler)
+- `--verbose`
+- `--quiet`
 - `--no-color`
-- `--root <path>` (Test/Dev: prefix für File-IO; default `/`)
+- `--root <path>` (default: `/`)
 - `--state-dir <path>` (default: `/var/lib/resguard`)
 - `--config-dir <path>` (default: `/etc/resguard`)
 
-Hinweis: `--root` ist für Tests/CI wichtig, um Apply/Diff ohne echtes `/etc/systemd` zu testen.
+### `--root` Verhalten (konkret)
+`--root` isoliert Dateipfade für Config/State/Systemd-Dateien:
 
-### Exit-Codes (vereinheitlicht)
+- `--config-dir /etc/resguard --root /tmp/rg` → tatsächlicher Pfad: `/tmp/rg/etc/resguard`
+- `--state-dir /var/lib/resguard --root /tmp/rg` → tatsächlicher Pfad: `/tmp/rg/var/lib/resguard`
+
+Wichtig:
+
+- `systemctl daemon-reload` wird nur ausgeführt, wenn `--root /`.
+- Bei Test-Roots (`/tmp/...`) werden keine systemd reload commands ausgeführt.
+
+### Exit-Codes (aktuell)
 - `0` OK
 - `1` generischer Fehler
-- `2` Validation failed (Profile/Args)
-- `3` Permission denied / not root (für commands die root brauchen)
-- `4` Apply failed (rollback attempted)
-- `5` Rollback failed
-- `6` External command failed (`systemctl`/`systemd-run`), inkl. Exit Status
+- `2` Validation/Argumentfehler
+- `3` Permission denied (nur relevant wenn `--root /`)
+- `4` Apply fehlgeschlagen, Rollback-Versuch wurde ausgeführt
+- `5` Rollback fehlgeschlagen
+- `6` `run`-Fehler (`systemctl`/`systemd-run`)
 
 ---
 
 ## Commands
 
 ## `resguard init`
-Auto-detect Hardware und generiert ein Profil.
-
 Syntax:
+
 - `resguard init [--name <n>] [--out <path>] [--apply] [--dry-run]`
 
 Verhalten:
+
+- Hardware-Detect: RAM aus `/proc/meminfo`, CPU über `available_parallelism()`
 - ohne root:
-  - schreibt standardmäßig nach `./<name>.yml` (oder `--out`)
+  - default write: `./<name>.yml`
 - mit root:
-  - schreibt standardmäßig nach `<config-dir>/profiles/<name>.yml`
-- `--apply`:
-  - führt anschließend `resguard apply <name>` aus (root erforderlich)
-- `--dry-run`:
-  - zeigt die generierte Profile YAML (keine Writes)
+  - default write: `<config-dir>/profiles/<name>.yml` (inkl. `--root` Mapping)
+- `--out` überschreibt Zielpfad
+- `--dry-run` druckt YAML, schreibt nichts
+- `--apply` ruft intern `apply` auf (kein Shell), benötigt root wenn `--root /`
 
 Exit:
+
 - `0` OK
-- `2` invalid args
-- `3` `--apply` ohne root
-
-Beispiele:
-```bash
-resguard init --dry-run
-resguard init --name auto-workstation
-sudo resguard init --apply
-````
-
----
-
-## `resguard profile`
-
-### `resguard profile list`
-
-Listet Profile aus `<config-dir>/profiles`.
-
-### `resguard profile show <name>`
-
-Gibt das Profil YAML aus.
-
-### `resguard profile new <name> [--from <base>]`
-
-Erstellt neues Profil. Ohne `--from` wird ein minimaler Skeleton erzeugt.
-
-### `resguard profile edit <name>`
-
-Öffnet `$EDITOR` (fallback: `nano`), danach validate und save.
-
-### `resguard profile validate <name|path>`
-
-Validiert Profil (Schema + Sanity). Gibt Fehler strukturiert aus.
-
-### `resguard profile import <file.yml>`
-
-Kopiert Profil ins profile store (Name aus metadata).
-
-### `resguard profile export <name> --out <file.yml>`
-
-Schreibt Profil in Datei.
-
----
-
-## `resguard diff <profile>`
-
-Vergleicht geplante Zielkonfiguration gegen aktuellen Zustand.
-
-* zeigt betroffene Dateien
-* zeigt unified diffs (oder in `--format json`: structured diff)
-
-Exit codes:
-
-* `0` OK (auch wenn Änderungen vorhanden; im Output signalisiert)
-* `2` invalid profile
-
-Optional flag:
-
-* `--show-content` (default on für table, off für json)
+- `2` invalid args (z. B. `--dry-run` + `--apply`)
+- `3` `--apply` ohne erforderliche Rechte
 
 ---
 
 ## `resguard apply <profile>`
-
-Wendet Profil an.
-
 Flags:
 
-* `--dry-run` (keine Writes, keine systemctl calls; zeigt Plan)
-* `--no-oomd` (skip ManagedOOM* props)
-* `--no-cpu` (skip AllowedCPUs)
-* `--no-classes` (skip generating class slices)
-* `--force` (apply auch wenn aktive profile anders; default: erlaubt, aber warnt)
-* `--user-daemon-reload` (best-effort: versucht `systemctl --user daemon-reload` für den Login-User)
+- `--dry-run`
+- `--no-oomd`
+- `--no-cpu`
+- `--no-classes`
+- `--force` (aktuell geparst, ohne zusätzliche Logik)
+- `--user-daemon-reload`
 
 Verhalten:
 
-* root erforderlich (außer `--dry-run`).
-* schreibt Drop-ins für:
+- lädt Profil aus `<config-dir>/profiles/<profile>.yml` (mit `--root` Mapping)
+- validiert Profil
+- plant und schreibt:
+  - `${root}/etc/systemd/system/system.slice.d/50-resguard.conf`
+  - `${root}/etc/systemd/system/user.slice.d/50-resguard.conf`
+  - `${root}/etc/systemd/system/resguard-<class>.slice`
+  - `${root}/etc/systemd/user/resguard-<class>.slice`
+- `--dry-run`: zeigt Plan, macht keine Writes
+- `systemctl daemon-reload` nur wenn `--root /`
+- `--user-daemon-reload` (best-effort) nur wenn `--root /` und `SUDO_USER` gesetzt:
+  - `sudo -u $SUDO_USER systemctl --user daemon-reload`
 
-  * system manager: `system.slice`, `user.slice`
-* erzeugt Klassen-Slices in:
+Transactional state/backups:
 
-  * system manager: `/etc/systemd/system/resguard-*.slice`
-  * user manager: `/etc/systemd/user/resguard-*.slice`
-* `systemctl daemon-reload` immer
-* `systemctl restart systemd-oomd` nur falls oomd settings geändert und oomd enabled im Profil
-* user reload:
+- Backup-ID (timestamp in ms)
+- Backups unter `${state_dir}/backups/<backup_id>/...`
+- Manifest: `${state_dir}/backups/<backup_id>/manifest.json`
+- State: `${state_dir}/state.json`
 
-  * wenn `--user-daemon-reload`: best-effort
-  * sonst: Hinweis im Output, wie man es selbst ausführt
+Bei Fehler:
 
-Exit:
-
-* `0` OK
-* `2` Validation failed
-* `3` not root
-* `4` apply failed (rollback attempted)
+- automatischer Rollback-Versuch innerhalb derselben Transaktion
+- Exit `4` wenn Rollback-Versuch erfolgreich
+- Exit `5` wenn Rollback selbst fehlschlägt
 
 ---
 
 ## `resguard rollback [--last | --to <backup-id>]`
+Verhalten:
 
-Rollback zur letzten oder spezifischen Backup-ID.
-
-* root erforderlich
-* stellt alle betroffenen Dateien wieder her
-* `systemctl daemon-reload`
-
-Exit:
-
-* `0` OK
-* `3` not root
-* `5` rollback failed
-
----
-
-## `resguard status`
-
-Zeigt:
-
-* aktives Profil (state.json)
-* Slice-Properties:
-
-  * system manager: `user.slice`, `system.slice`, `resguard-*.slice`
-  * user manager: `resguard-*.slice` (best-effort)
-* `systemd-oomd` aktiv?
-* optional PSI: CPU/Mem pressure summary
-* Hinweise (z. B. „MemoryMax nicht gesetzt“, „oomd disabled“)
+- `--last`: nutzt `backupId` aus `${state_dir}/state.json`
+- `--to`: nutzt explizite Backup-ID
+- stellt gesicherte Dateien aus Backup wieder her
+- entfernt alle in `createdPaths` markierten Dateien
+- `systemctl daemon-reload` nur wenn `--root /`
+- setzt `state.json` anschließend auf default/leer
 
 Exit:
 
-* `0` OK
-* `1` Status teilweise nicht lesbar (best-effort output)
-* `6` `systemctl show` hart fehlschlägt
+- `0` OK
+- `2` ungültige Argumente (weder `--last` noch `--to`)
+- `3` Rechteproblem (nur bei `--root /`)
+- `5` Rollback fehlgeschlagen
 
 ---
 
 ## `resguard run --class <class> -- <cmd...>`
-
-Startet ein Kommando zuverlässig in einer Klasse (Slice), via transient scope.
-
 Syntax:
 
-* `resguard run --class <class> [--profile <name>] [--slice <slice>] [--wait] -- <cmd...>`
+- `resguard run --class <class> [--profile <name>] [--slice <slice>] [--wait] -- <cmd...>`
 
-Regeln:
+Slice-Auflösung:
 
-* `<cmd...>` ist Pflicht nach `--`.
-* Klasse kommt aus aktivem Profil (state.json) oder via `--profile`.
-* Wenn `--slice` gesetzt ist, überschreibt es die Slice-Auflösung.
+- `--slice` hat Vorrang
+- sonst Klasse aus Profil:
+  - `--profile <name>` oder
+  - aktives Profil aus `${state_dir}/state.json`
+- wenn keine aktive Profile-Info vorhanden: Fehler "apply profile first"
+
+Existenzprüfung (hard fail):
+
+- user mode: `systemctl --user cat <slice>`
+- system mode: `systemctl cat <slice>`
+- bei Fehler: Hinweis "apply profile first"
 
 Mode:
 
-* wenn `geteuid()==0` → system mode:
+- `euid == 0` → system mode
+- sonst user mode
 
-  * `systemd-run --scope -p Slice=<slice> -- <cmd...>`
-* sonst → user mode:
+Exec:
 
-  * `systemd-run --user --scope -p Slice=<slice> -- <cmd...>`
-
-Slice existence:
-
-* user mode: `systemctl --user cat <slice>` (best-effort)
-* system mode: `systemctl cat <slice>`
-  Wenn fehlt → Error: „apply profile first“.
+- user: `systemd-run --user --scope -p Slice=<slice> -- <cmd...>`
+- system: `systemd-run --scope -p Slice=<slice> -- <cmd...>`
+- `--wait` fügt `--wait` hinzu und gibt den echten Command-Exitcode zurück
 
 Exit:
 
-* `0` Start OK (oder Command OK bei `--wait`)
-* `2` invalid class/profile/args
-* `6` systemd-run failed
-
-Beispiele:
-
-```bash
-resguard run --class browsers -- firefox
-resguard run --class heavy -- docker compose up
-sudo resguard run --class heavy -- /usr/local/bin/some-root-workload
-```
+- ohne `--wait`: `0` bei Start-OK, sonst `6`
+- mit `--wait`: Exitcode des gestarteten Commands
 
 ---
 
-## Output-Formate
+## `resguard status`
+Best-effort Diagnose:
 
-### `--format table` (default)
+- liest `${state_dir}/state.json` (active profile, managed paths)
+- zeigt `systemctl show` Props für `system.slice` und `user.slice`:
+  - `MemoryLow`, `MemoryHigh`, `MemoryMax`, `AllowedCPUs`
+- zeigt class slices aus State (system show)
+- versucht `systemctl --user show resguard-browsers.slice` (best-effort)
+- prüft `systemd-oomd` via `systemctl is-active systemd-oomd`
+- liest PSI `avg60` aus `/proc/pressure/memory` und `/proc/pressure/cpu`
 
-* menschenlesbar
-* diffs als unified diff blocks
+Exit:
 
-### `--format json`
-
-* für scripting
-* enthält:
-
-  * command, timestamp
-  * plan/actions (paths, operations)
-  * state (active profile, backup id)
-  * errors structured
-
-### `--format yaml`
-
-* wie json, nur YAML
+- `0` wenn alles lesbar
+- `1` wenn Teilinformationen fehlen (Warnungen werden ausgegeben)
 
 ---
 
-## Minimalanforderungen (v0.1)
+## `resguard profile ...`
+Aktuell implementiert:
 
-* systemd vorhanden
-* cgroups v2
-* `systemctl` und `systemd-run` im PATH
+- `resguard profile validate <name|path>`
 
+Status:
 
+- `list/show/import/export/new/edit` sind derzeit CLI-Stubs.
+
+---
+
+## `resguard diff`
+Aktuell CLI-Stub.

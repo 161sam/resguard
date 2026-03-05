@@ -85,6 +85,23 @@ Bei teilweise fehlenden Informationen gibt der Command Warnungen aus und endet m
 cargo run -p resguard -- status
 ```
 
+## TUI usage and feature flag
+
+Die TUI ist optional und wird nur mit Feature-Flag gebaut:
+
+```bash
+cargo run -p resguard --features tui -- tui
+```
+
+Optionen:
+
+- `--interval <ms>`: Refresh-Intervall (default `1000`)
+- `--no-top`: nur Summary (ohne Top scopes/slices Tabelle)
+
+Non-interactive Fallback:
+
+- Wenn `stdout` kein TTY ist, gibt `resguard tui` automatisch eine einmalige Summary aus und beendet sich.
+
 ## Weitere Doku
 
 - [CLI](docs/cli.md)

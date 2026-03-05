@@ -25,6 +25,8 @@ use std::collections::BTreeMap;
 use std::env;
 #[cfg(feature = "tui")]
 use std::io;
+#[cfg(feature = "tui")]
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 use std::time::Duration;
@@ -110,7 +112,12 @@ enum Commands {
     Doctor,
     Metrics,
     #[cfg(feature = "tui")]
-    Tui,
+    Tui {
+        #[arg(long, default_value_t = 1000)]
+        interval: u64,
+        #[arg(long)]
+        no_top: bool,
+    },
     Panic {
         #[arg(long, help = "Temporary panic duration like 30s, 10m, 1h")]
         duration: Option<String>,
@@ -1996,8 +2003,69 @@ fn opt_bytes(v: Option<u64>) -> String {
 }
 
 #[cfg(feature = "tui")]
-fn handle_tui() -> Result<i32> {
+fn print_tui_summary(snapshot: &TuiSnapshot, no_top: bool) -> i32 {
+    let mut partial = false;
+    println!("mode=summary non_tty=true");
+    println!(
+        "psi cpu(avg10/avg60)={}/{} mem(avg10/avg60)={}/{} io(avg10/avg60)={}/{}",
+        opt_f64(snapshot.cpu_avg10),
+        opt_f64(snapshot.cpu_avg60),
+        opt_f64(snapshot.mem_avg10),
+        opt_f64(snapshot.mem_avg60),
+        opt_f64(snapshot.io_avg10),
+        opt_f64(snapshot.io_avg60)
+    );
+    if snapshot.cpu_avg10.is_none()
+        || snapshot.mem_avg10.is_none()
+        || snapshot.io_avg10.is_none()
+        || snapshot.cpu_avg60.is_none()
+        || snapshot.mem_avg60.is_none()
+        || snapshot.io_avg60.is_none()
+    {
+        partial = true;
+    }
+
+    println!(
+        "memory total={} available={} user.slice.current={} user.slice.max={}",
+        opt_bytes(snapshot.mem_total),
+        opt_bytes(snapshot.mem_available),
+        opt_bytes(snapshot.user_slice_current),
+        opt_bytes(snapshot.user_slice_max),
+    );
+    if snapshot.mem_total.is_none() || snapshot.mem_available.is_none() {
+        partial = true;
+    }
+
+    if !no_top {
+        println!("top_slices");
+        if snapshot.top_units.is_empty() {
+            println!("unavailable");
+            partial = true;
+        } else {
+            for row in snapshot.top_units.iter().take(5) {
+                println!("{}\t{}", row.unit, format_bytes_human(row.memory_current));
+            }
+        }
+    }
+
+    if partial {
+        1
+    } else {
+        0
+    }
+}
+
+#[cfg(feature = "tui")]
+fn handle_tui(interval_ms: u64, no_top: bool) -> Result<i32> {
     println!("command=tui");
+    if interval_ms == 0 {
+        return Err(anyhow!("--interval must be > 0"));
+    }
+
+    if !io::stdout().is_terminal() {
+        let snapshot = collect_tui_snapshot();
+        return Ok(print_tui_summary(&snapshot, no_top));
+    }
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -2006,7 +2074,7 @@ fn handle_tui() -> Result<i32> {
     let mut terminal = Terminal::new(backend)?;
 
     let result = (|| -> Result<i32> {
-        let tick = Duration::from_secs(1);
+        let tick = Duration::from_millis(interval_ms);
         let mut last = Instant::now()
             .checked_sub(tick)
             .unwrap_or_else(Instant::now);
@@ -2016,15 +2084,26 @@ fn handle_tui() -> Result<i32> {
                 let snapshot = collect_tui_snapshot();
                 terminal.draw(|f| {
                     let area = f.area();
-                    let layout = Layout::default()
-                        .direction(Direction::Vertical)
-                        .constraints([
-                            Constraint::Length(5),
-                            Constraint::Length(4),
-                            Constraint::Length(3),
-                            Constraint::Min(8),
-                        ])
-                        .split(area);
+                    let layout = if no_top {
+                        Layout::default()
+                            .direction(Direction::Vertical)
+                            .constraints([
+                                Constraint::Length(5),
+                                Constraint::Length(4),
+                                Constraint::Length(3),
+                            ])
+                            .split(area)
+                    } else {
+                        Layout::default()
+                            .direction(Direction::Vertical)
+                            .constraints([
+                                Constraint::Length(5),
+                                Constraint::Length(4),
+                                Constraint::Length(3),
+                                Constraint::Min(8),
+                            ])
+                            .split(area)
+                    };
 
                     let psi_text = format!(
                         "CPU avg10={} avg60={}   MEM avg10={} avg60={}   IO avg10={} avg60={}",
@@ -2066,27 +2145,29 @@ fn handle_tui() -> Result<i32> {
                         .label(format!("{:.0}%", ratio * 100.0));
                     f.render_widget(gauge, layout[2]);
 
-                    let rows: Vec<Row> = snapshot
-                        .top_units
-                        .iter()
-                        .map(|r| {
-                            Row::new(vec![
-                                Cell::from(r.unit.clone()),
-                                Cell::from(format_bytes_human(r.memory_current)),
-                            ])
-                        })
-                        .collect();
-                    let table = Table::new(
-                        rows,
-                        [Constraint::Percentage(70), Constraint::Percentage(30)],
-                    )
-                    .header(Row::new(vec!["unit", "memory"]))
-                    .block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .title("Top scopes/slices by MemoryCurrent (q to quit)"),
-                    );
-                    f.render_widget(table, layout[3]);
+                    if !no_top {
+                        let rows: Vec<Row> = snapshot
+                            .top_units
+                            .iter()
+                            .map(|r| {
+                                Row::new(vec![
+                                    Cell::from(r.unit.clone()),
+                                    Cell::from(format_bytes_human(r.memory_current)),
+                                ])
+                            })
+                            .collect();
+                        let table = Table::new(
+                            rows,
+                            [Constraint::Percentage(70), Constraint::Percentage(30)],
+                        )
+                        .header(Row::new(vec!["unit", "memory"]))
+                        .block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .title("Top scopes/slices by MemoryCurrent (q to quit)"),
+                        );
+                        f.render_widget(table, layout[3]);
+                    }
                 })?;
                 last = Instant::now();
             }
@@ -3168,7 +3249,7 @@ fn main() {
             }
         },
         #[cfg(feature = "tui")]
-        Commands::Tui => match handle_tui() {
+        Commands::Tui { interval, no_top } => match handle_tui(interval, no_top) {
             Ok(code) => code,
             Err(err) => {
                 eprintln!("tui failed: {err}");

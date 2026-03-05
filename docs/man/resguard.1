@@ -1,0 +1,153 @@
+.TH RESGUARD 1 "March 2026" "resguard 0.1.0" "User Commands"
+.SH NAME
+resguard \- Linux system resource guard using systemd slices
+
+.SH SYNOPSIS
+.B resguard
+[GLOBAL OPTIONS]
+COMMAND [COMMAND OPTIONS]
+
+.SH DESCRIPTION
+.B resguard
+is a native Linux tool that manages system resource isolation through
+systemd slices and cgroups v2.
+
+The tool is agentless by default: it writes managed systemd configuration,
+then relies on systemd for enforcement.
+
+.SH COMMANDS
+.TP
+.B init
+Auto-detect hardware and generate a profile.
+
+.TP
+.B apply <profile>
+Apply a profile by writing managed systemd drop-ins and slice units.
+Supports dry-run and rollback-aware transactional behavior.
+
+.TP
+.B diff <profile>
+Show pending managed file changes for a profile.
+
+.TP
+.B rollback [--last | --to <backup-id>]
+Restore from backup state and remove paths created by apply.
+
+.TP
+.B status
+Show best-effort status information (active profile, slice properties,
+oomd state, PSI summary).
+
+.TP
+.B doctor
+Run best-effort diagnostic checks for common setup/runtime issues.
+
+.TP
+.B metrics
+Show pressure and memory/slice usage metrics from /proc and systemctl.
+
+.TP
+.B run --class <class> -- <cmd...>
+Start a command in a class slice via systemd-run.
+Supports --wait and optional --no-check override.
+
+.TP
+.B panic [--duration <Ns|Nm|Nh>]
+Temporarily tighten user.slice runtime limits via systemctl set-property.
+
+.TP
+.B profile <subcommand>
+Profile management namespace.
+Implemented in v0.1: validate.
+Other subcommands are CLI stubs.
+
+.TP
+.B desktop <subcommand>
+Desktop wrapper namespace for v0.2 planning.
+Current subcommands are CLI stubs.
+
+.SH GLOBAL OPTIONS
+.TP
+.B --format <table|json|yaml>
+Output format. Default: table.
+
+.TP
+.B --root <path>
+Root prefix for filesystem operations. Default: /.
+Useful for integration testing without writing to host /etc or /var.
+
+.TP
+.B --config-dir <path>
+Profile config directory. Default: /etc/resguard.
+
+.TP
+.B --state-dir <path>
+State and backup directory. Default: /var/lib/resguard.
+
+.TP
+.B --verbose
+Enable verbose output.
+
+.TP
+.B --quiet
+Reduce output to errors.
+
+.TP
+.B --no-color
+Disable colorized output.
+
+.SH EXAMPLES
+.nf
+resguard init --dry-run
+resguard init --name demo --out /etc/resguard/profiles/demo.yml --root /tmp/rg
+resguard apply demo --dry-run --root /tmp/rg
+resguard apply demo --root /tmp/rg
+resguard rollback --last --root /tmp/rg
+resguard run --class browsers -- firefox
+resguard doctor
+resguard metrics
+.fi
+
+.SH FILES
+.TP
+.I /etc/resguard/profiles/*.yml
+Profile store (default; affected by --config-dir and --root).
+
+.TP
+.I /var/lib/resguard/state.json
+Active state (default; affected by --state-dir and --root).
+
+.TP
+.I /var/lib/resguard/backups/<backup-id>/manifest.json
+Backup manifest for rollback.
+
+.TP
+.I /etc/systemd/system/system.slice.d/50-resguard.conf
+Managed system.slice drop-in.
+
+.TP
+.I /etc/systemd/system/user.slice.d/50-resguard.conf
+Managed user.slice drop-in.
+
+.TP
+.I /etc/systemd/system/resguard-*.slice
+Managed class slices (system manager).
+
+.TP
+.I /etc/systemd/user/resguard-*.slice
+Managed class slices (user manager).
+
+.SH SECURITY
+resguard modifies resource-related systemd configuration.
+For safety:
+
+.IP \[bu] 2
+Use dry-run before apply in production.
+.IP \[bu] 2
+Prefer explicit profile validation.
+.IP \[bu] 2
+Use rollback on failed or undesired applies.
+.IP \[bu] 2
+Avoid bypass options (for example run --no-check) unless required.
+
+See also: SECURITY.md and docs/safety.md.

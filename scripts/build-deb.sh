@@ -34,6 +34,7 @@ install -d -m 0755 "$STAGE_DIR/usr/bin"
 install -d -m 0755 "$STAGE_DIR/etc/resguard/profiles"
 install -d -m 0755 "$STAGE_DIR/var/lib/resguard"
 install -d -m 0755 "$STAGE_DIR/usr/share/doc/resguard"
+install -d -m 0755 "$STAGE_DIR/usr/share/man/man1"
 
 cargo build --release -p resguard --manifest-path "$ROOT_DIR/Cargo.toml"
 
@@ -43,6 +44,7 @@ install -m 0755 "$POSTINST_FILE" "$STAGE_DIR/DEBIAN/postinst"
 install -m 0755 "$PRERM_FILE" "$STAGE_DIR/DEBIAN/prerm"
 install -m 0644 "$ROOT_DIR/README.md" "$STAGE_DIR/usr/share/doc/resguard/README.md"
 install -m 0644 "$ROOT_DIR/CHANGELOG.md" "$STAGE_DIR/usr/share/doc/resguard/CHANGELOG.md"
+install -m 0644 "$ROOT_DIR/docs/man/resguard.1" "$STAGE_DIR/usr/share/man/man1/resguard.1"
 
 rm -f "$ROOT_DIR/$ARTIFACT_NAME"
 if dpkg-deb --help 2>/dev/null | grep -q -- "--root-owner-group"; then

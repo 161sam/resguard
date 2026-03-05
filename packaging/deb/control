@@ -1,0 +1,7 @@
+Package: resguard
+Version: 0.1.0
+Section: admin
+Priority: optional
+Architecture: amd64
+Maintainer: Resguard Project
+Description: Linux system resource guard using systemd slices

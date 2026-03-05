@@ -1,0 +1,8 @@
+#!/bin/sh
+set -e
+
+install -d -o root -g root -m 0755 /etc/resguard
+install -d -o root -g root -m 0755 /etc/resguard/profiles
+install -d -o root -g root -m 0755 /var/lib/resguard
+
+exit 0

@@ -1430,6 +1430,40 @@ fn wrapper_desktop_id(desktop_id: &str, class: &str) -> String {
     format!("{desktop_id}.resguard-{class}.desktop")
 }
 
+fn validate_wrapper_filename(name: &str) -> Result<()> {
+    if name.is_empty() || name.len() > 255 {
+        return Err(anyhow!("invalid wrapper filename length"));
+    }
+    if !name.ends_with(".desktop") {
+        return Err(anyhow!("wrapper filename must end with .desktop"));
+    }
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return Err(anyhow!("wrapper filename contains invalid path components"));
+    }
+    Ok(())
+}
+
+fn wrapper_path_for(desktop_id: &str, class: &str) -> Result<PathBuf> {
+    validate_desktop_id(desktop_id)?;
+    validate_class_name(class)?;
+
+    let filename = wrapper_desktop_id(desktop_id, class);
+    validate_wrapper_filename(&filename)?;
+
+    let base = user_applications_dir()?;
+    let path = base.join(filename);
+    let rel = path
+        .strip_prefix(&base)
+        .context("wrapper path escaped base directory")?;
+    if rel
+        .components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err(anyhow!("wrapper path contains parent traversal"));
+    }
+    Ok(path)
+}
+
 fn wrap_exec(exec: &str, class: &str) -> String {
     format!("resguard run --class {class} -- {}", exec.trim())
 }
@@ -1714,12 +1748,10 @@ fn command_exists_in_path(cmd: &str) -> bool {
 
 fn handle_desktop_wrap(desktop_id: &str, class: &str, force: bool) -> Result<i32> {
     println!("command=desktop wrap");
-    validate_desktop_id(desktop_id)?;
-    validate_class_name(class)?;
 
     let source = resolve_desktop_source(desktop_id)?;
     let wrapper_id = wrapper_desktop_id(&source.desktop_id, class);
-    let wrapper_path = user_applications_dir()?.join(&wrapper_id);
+    let wrapper_path = wrapper_path_for(&source.desktop_id, class)?;
 
     if wrapper_path.exists() && !force {
         return Err(anyhow!(
@@ -1778,18 +1810,26 @@ fn handle_desktop_wrap(desktop_id: &str, class: &str, force: bool) -> Result<i32
 
 fn handle_desktop_unwrap(desktop_id: &str, class: &str) -> Result<i32> {
     println!("command=desktop unwrap");
-    validate_desktop_id(desktop_id)?;
-    validate_class_name(class)?;
+    let expected_wrapper_path = wrapper_path_for(desktop_id, class)?;
 
     let mut store = read_desktop_mapping_store()?;
     let mut removed = false;
 
     if let Some(by_class) = store.mappings.get_mut(desktop_id) {
         if let Some(entry) = by_class.remove(class) {
-            let wrapper_path = PathBuf::from(&entry.wrapper_path);
-            if wrapper_path.exists() {
-                fs::remove_file(&wrapper_path).with_context(|| {
-                    format!("failed to remove wrapper {}", wrapper_path.display())
+            if Path::new(&entry.wrapper_path) != expected_wrapper_path {
+                eprintln!(
+                    "warn: ignoring non-canonical wrapper path in mapping: {} (expected {})",
+                    entry.wrapper_path,
+                    expected_wrapper_path.display()
+                );
+            }
+            if expected_wrapper_path.exists() {
+                fs::remove_file(&expected_wrapper_path).with_context(|| {
+                    format!(
+                        "failed to remove wrapper {}",
+                        expected_wrapper_path.display()
+                    )
                 })?;
             }
             removed = true;
@@ -1800,10 +1840,13 @@ fn handle_desktop_unwrap(desktop_id: &str, class: &str) -> Result<i32> {
     }
 
     if !removed {
-        let fallback = user_applications_dir()?.join(wrapper_desktop_id(desktop_id, class));
-        if fallback.exists() {
-            fs::remove_file(&fallback)
-                .with_context(|| format!("failed to remove wrapper {}", fallback.display()))?;
+        if expected_wrapper_path.exists() {
+            fs::remove_file(&expected_wrapper_path).with_context(|| {
+                format!(
+                    "failed to remove wrapper {}",
+                    expected_wrapper_path.display()
+                )
+            })?;
             removed = true;
         }
     }
@@ -2542,6 +2585,31 @@ mod tests {
         assert!(validate_desktop_id("firefox").is_err());
         assert!(validate_desktop_id("../firefox.desktop").is_err());
         assert!(validate_desktop_id("foo/bar.desktop").is_err());
+    }
+
+    #[test]
+    fn wrapper_path_is_normalized_under_user_applications() {
+        let temp = tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        std::fs::create_dir_all(&home).expect("create home");
+
+        let old_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", &home);
+
+        let path = wrapper_path_for("firefox.desktop", "browsers").expect("wrapper path");
+        assert!(path.starts_with(home.join(".local/share/applications")));
+        assert_eq!(
+            path.file_name().and_then(|n| n.to_str()),
+            Some("firefox.desktop.resguard-browsers.desktop")
+        );
+
+        assert!(wrapper_path_for("../firefox.desktop", "browsers").is_err());
+        assert!(wrapper_path_for("firefox.desktop", "bad/class").is_err());
+
+        match old_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
     }
 
     #[test]

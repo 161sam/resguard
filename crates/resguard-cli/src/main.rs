@@ -1173,6 +1173,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use resguard_core::parse_size_to_bytes;
     use tempfile::tempdir;
 
     fn test_apply_opts() -> ApplyOptions {
@@ -1192,6 +1193,86 @@ mod tests {
             .join("etc/resguard/profiles")
             .join(format!("{name}.yml"));
         save_profile(path, &profile).expect("seed profile");
+    }
+
+    fn mem_to_bytes(s: &str) -> u64 {
+        parse_size_to_bytes(s).expect("parse memory size")
+    }
+
+    #[test]
+    fn rounding_helpers_round_to_expected_boundaries() {
+        let mib_256 = 256 * 1024_u64.pow(2);
+        let gb = 1024_u64.pow(3);
+
+        assert_eq!(round_down_to_step(3 * gb + 123, gb), 3 * gb);
+        assert_eq!(round_up_to_step(3 * gb + 123, gb), 4 * gb);
+        assert_eq!(round_down_to_step(7 * mib_256 + 1, mib_256), 7 * mib_256);
+        assert_eq!(round_up_to_step(7 * mib_256 + 1, mib_256), 8 * mib_256);
+    }
+
+    #[test]
+    fn auto_profile_uses_sane_rounded_caps_for_16g() {
+        let gb = 1024_u64.pow(3);
+        let profile = build_auto_profile("demo", 16 * gb, 8);
+        let memory = profile.spec.memory.expect("memory");
+        let user = memory.user.expect("user memory");
+        let system = memory.system.expect("system memory");
+
+        assert_eq!(
+            mem_to_bytes(system.memory_low.as_deref().expect("memoryLow")),
+            2 * gb
+        );
+        assert_eq!(
+            mem_to_bytes(user.memory_max.as_deref().expect("memoryMax")),
+            14 * gb
+        );
+        assert_eq!(
+            mem_to_bytes(user.memory_high.as_deref().expect("memoryHigh")),
+            12 * gb
+        );
+
+        let classes = profile.spec.classes;
+        assert_eq!(
+            mem_to_bytes(
+                classes["browsers"]
+                    .memory_max
+                    .as_deref()
+                    .expect("browsers memoryMax")
+            ),
+            6 * gb
+        );
+        assert_eq!(
+            mem_to_bytes(classes["ide"].memory_max.as_deref().expect("ide memoryMax")),
+            4 * gb
+        );
+        assert_eq!(
+            mem_to_bytes(
+                classes["heavy"]
+                    .memory_max
+                    .as_deref()
+                    .expect("heavy memoryMax")
+            ),
+            4 * gb
+        );
+    }
+
+    #[test]
+    fn auto_profile_cpu_policy_respects_core_count() {
+        let gb = 1024_u64.pow(3);
+
+        let low_core = build_auto_profile("low", 8 * gb, 2);
+        let low_cpu = low_core.spec.cpu.expect("cpu");
+        assert_eq!(low_cpu.enabled, Some(false));
+        assert_eq!(low_cpu.reserve_core_for_system, Some(false));
+        assert_eq!(low_cpu.system_allowed_cpus, None);
+        assert_eq!(low_cpu.user_allowed_cpus, None);
+
+        let high_core = build_auto_profile("high", 16 * gb, 8);
+        let high_cpu = high_core.spec.cpu.expect("cpu");
+        assert_eq!(high_cpu.enabled, Some(true));
+        assert_eq!(high_cpu.reserve_core_for_system, Some(true));
+        assert_eq!(high_cpu.system_allowed_cpus.as_deref(), Some("0"));
+        assert_eq!(high_cpu.user_allowed_cpus.as_deref(), Some("1-7"));
     }
 
     #[test]

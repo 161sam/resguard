@@ -419,6 +419,32 @@ fn print_plan(actions: &[Action]) {
     }
 }
 
+fn write_needs_change(path: &Path, desired: &str) -> Result<bool> {
+    match std::fs::read_to_string(path) {
+        Ok(current) => Ok(current != desired),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(err)
+            if err.kind() == std::io::ErrorKind::IsADirectory
+                || err.kind() == std::io::ErrorKind::InvalidData =>
+        {
+            Ok(true)
+        }
+        Err(err) => Err(anyhow!("failed to read {}: {}", path.display(), err)),
+    }
+}
+
+fn planned_write_changes(actions: &[Action]) -> Result<Vec<(PathBuf, String)>> {
+    let mut out = Vec::new();
+    for action in actions {
+        if let Action::WriteFile { path, content } = action {
+            if write_needs_change(path, content)? {
+                out.push((path.clone(), content.clone()));
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn maybe_daemon_reload_for_root(root: &str) -> Result<()> {
     if root == "/" {
         let status = exec_command(
@@ -546,10 +572,17 @@ fn handle_apply(
             sudo_runtime_dir,
         },
     );
+    let changed_writes = planned_write_changes(&plan)?;
 
     print_plan(&plan);
+    println!("plan_write_changes={}", changed_writes.len());
     if opts.dry_run {
         println!("result=dry-run");
+        return Ok(0);
+    }
+
+    if changed_writes.is_empty() {
+        println!("result=no-changes");
         return Ok(0);
     }
 
@@ -586,6 +619,36 @@ fn handle_apply(
     write_state(&rooted_state_dir, &state_from_manifest(&manifest))?;
 
     println!("result=ok");
+    Ok(0)
+}
+
+fn handle_diff(root: &str, config_dir: &str, profile_name: &str) -> Result<i32> {
+    println!("command=diff");
+    println!("profile={profile_name}");
+
+    let rooted_config_dir = resolve_with_root(root, PathBuf::from(config_dir))?;
+    let profile = load_profile_from_store(&rooted_config_dir, profile_name).map_err(|err| {
+        anyhow!(
+            "failed to load profile '{profile_name}' from {}: {err}",
+            rooted_config_dir.display()
+        )
+    })?;
+
+    let validation_errors = validate_profile(&profile);
+    if !validation_errors.is_empty() {
+        println!("result=invalid");
+        for err in validation_errors {
+            println!("error\t{}\t{}", err.path, err.message);
+        }
+        return Ok(2);
+    }
+
+    let plan = build_apply_plan(&profile, Path::new(root), &PlanOptions::default());
+    let changed_writes = planned_write_changes(&plan)?;
+    for (path, _) in &changed_writes {
+        println!("change\t{}", path.display());
+    }
+    println!("changes={}", changed_writes.len());
     Ok(0)
 }
 
@@ -1037,11 +1100,13 @@ fn main() {
                 1
             }
         },
-        Commands::Diff { profile } => {
-            println!("command=diff");
-            println!("profile={profile}");
-            0
-        }
+        Commands::Diff { profile } => match handle_diff(&root, &config_dir, &profile) {
+            Ok(code) => code,
+            Err(err) => {
+                eprintln!("diff failed: {err}");
+                1
+            }
+        },
         Commands::Rollback { last, to } => match handle_rollback(&root, &state_dir, last, to) {
             Ok(code) => {
                 if code == 2 {
@@ -1187,6 +1252,10 @@ mod tests {
         }
     }
 
+    fn rooted_state_file(root: &Path) -> PathBuf {
+        root.join("var/lib/resguard/state.json")
+    }
+
     fn seed_profile(root: &Path, name: &str) {
         let profile = build_auto_profile(name, 16 * 1024_u64.pow(3), 8);
         let path = root
@@ -1276,6 +1345,83 @@ mod tests {
     }
 
     #[test]
+    fn apply_is_idempotent_and_state_stable() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(&root).expect("create root");
+        seed_profile(&root, "idem");
+
+        let code_first = handle_apply(
+            root.to_str().expect("root str"),
+            "/etc/resguard",
+            "/var/lib/resguard",
+            "idem",
+            &test_apply_opts(),
+        )
+        .expect("first apply result");
+        assert_eq!(code_first, 0);
+
+        let state_before = std::fs::read_to_string(rooted_state_file(&root)).expect("read state 1");
+        let code_second = handle_apply(
+            root.to_str().expect("root str"),
+            "/etc/resguard",
+            "/var/lib/resguard",
+            "idem",
+            &test_apply_opts(),
+        )
+        .expect("second apply result");
+        assert_eq!(code_second, 0);
+        let state_after = std::fs::read_to_string(rooted_state_file(&root)).expect("read state 2");
+
+        assert_eq!(state_before, state_after);
+    }
+
+    #[test]
+    fn diff_shows_changes_before_apply_and_none_after_apply() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(&root).expect("create root");
+        seed_profile(&root, "diffprof");
+
+        let rooted_config_dir = root.join("etc/resguard");
+        let profile =
+            load_profile_from_store(&rooted_config_dir, "diffprof").expect("load profile");
+        let plan_before = build_apply_plan(&profile, &root, &PlanOptions::default());
+        let changes_before = planned_write_changes(&plan_before).expect("changes before");
+        assert!(!changes_before.is_empty());
+
+        let diff_before = handle_diff(
+            root.to_str().expect("root str"),
+            "/etc/resguard",
+            "diffprof",
+        )
+        .expect("handle diff before");
+        assert_eq!(diff_before, 0);
+
+        let apply_code = handle_apply(
+            root.to_str().expect("root str"),
+            "/etc/resguard",
+            "/var/lib/resguard",
+            "diffprof",
+            &test_apply_opts(),
+        )
+        .expect("apply result");
+        assert_eq!(apply_code, 0);
+
+        let plan_after = build_apply_plan(&profile, &root, &PlanOptions::default());
+        let changes_after = planned_write_changes(&plan_after).expect("changes after");
+        assert!(changes_after.is_empty());
+
+        let diff_after = handle_diff(
+            root.to_str().expect("root str"),
+            "/etc/resguard",
+            "diffprof",
+        )
+        .expect("handle diff after");
+        assert_eq!(diff_after, 0);
+    }
+
+    #[test]
     fn apply_then_rollback_restores_file() {
         let temp = tempdir().expect("tempdir");
         let root = temp.path().join("root");
@@ -1338,5 +1484,44 @@ mod tests {
 
         let content = std::fs::read_to_string(&system_dropin).expect("read restored system dropin");
         assert_eq!(content, "ORIGINAL\n");
+    }
+
+    #[test]
+    fn rollback_restores_backed_up_and_removes_created_paths() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(&root).expect("create root");
+        seed_profile(&root, "inv");
+
+        let backed_up_target = root.join("etc/systemd/system/system.slice.d/50-resguard.conf");
+        std::fs::create_dir_all(backed_up_target.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&backed_up_target, "BEFORE\n").expect("seed backed-up file");
+
+        let code = handle_apply(
+            root.to_str().expect("root str"),
+            "/etc/resguard",
+            "/var/lib/resguard",
+            "inv",
+            &test_apply_opts(),
+        )
+        .expect("apply result");
+        assert_eq!(code, 0);
+
+        std::fs::write(&backed_up_target, "MUTATED\n").expect("mutate backed-up target");
+        let created_target = root.join("etc/systemd/user/resguard-browsers.slice");
+        assert!(created_target.exists());
+
+        let rollback_code = handle_rollback(
+            root.to_str().expect("root str"),
+            "/var/lib/resguard",
+            true,
+            None,
+        )
+        .expect("rollback result");
+        assert_eq!(rollback_code, 0);
+
+        let restored = std::fs::read_to_string(&backed_up_target).expect("restored content");
+        assert_eq!(restored, "BEFORE\n");
+        assert!(!created_target.exists());
     }
 }

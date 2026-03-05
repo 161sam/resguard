@@ -1,0 +1,10 @@
+[package]
+name = "resguard-config"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+
+serde_yaml = "0.9"
+anyhow = "1"
+resguard-core = { path = "../resguard-core" }

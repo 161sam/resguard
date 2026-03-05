@@ -1,5 +1,14 @@
 #!/bin/sh
 set -e
 
+case "$1" in
+  remove|purge)
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl stop resguardd.service >/dev/null 2>&1 || true
+      systemctl disable resguardd.service >/dev/null 2>&1 || true
+    fi
+    ;;
+esac
+
 # Keep config/state directories on removal by default.
 exit 0

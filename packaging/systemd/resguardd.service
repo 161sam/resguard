@@ -1,14 +1,24 @@
 [Unit]
 Description=Resguard freeze watchdog daemon
-After=network.target
+Documentation=https://github.com/resguard/resguard
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 ExecStart=/usr/bin/resguardd --config /etc/resguard/resguardd.yml
-Restart=always
-RestartSec=5
-User=root
-Group=root
+Restart=on-failure
+RestartSec=3
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+LockPersonality=true
+MemoryDenyWriteExecute=true
 
 [Install]
 WantedBy=multi-user.target

@@ -144,6 +144,10 @@ enum Commands {
         #[command(subcommand)]
         cmd: DesktopCmd,
     },
+    Daemon {
+        #[command(subcommand)]
+        cmd: DaemonCmd,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -194,6 +198,13 @@ enum DesktopCmd {
         class: String,
     },
     Doctor,
+}
+
+#[derive(Subcommand, Debug)]
+enum DaemonCmd {
+    Enable,
+    Disable,
+    Status,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
@@ -1561,6 +1572,48 @@ fn handle_doctor(root: &str, state_dir: &str) -> Result<i32> {
     }
 
     Ok(if partial { 1 } else { 0 })
+}
+
+fn run_systemctl_service_action(action: &str, service: &str) -> Result<i32> {
+    let status = Command::new("systemctl")
+        .arg(action)
+        .arg(service)
+        .status()?;
+    if status.success() {
+        println!("result=ok action={} service={}", action, service);
+        Ok(0)
+    } else {
+        eprintln!(
+            "systemctl {} {} failed with status {}",
+            action, service, status
+        );
+        Ok(1)
+    }
+}
+
+fn handle_daemon_enable() -> Result<i32> {
+    println!("command=daemon enable");
+    run_systemctl_service_action("enable", "resguardd.service")
+}
+
+fn handle_daemon_disable() -> Result<i32> {
+    println!("command=daemon disable");
+    run_systemctl_service_action("disable", "resguardd.service")
+}
+
+fn handle_daemon_status() -> Result<i32> {
+    println!("command=daemon status");
+    let enabled = check_command_success("systemctl", &["is-enabled", "resguardd.service"]);
+    let active = check_command_success("systemctl", &["is-active", "resguardd.service"]);
+    println!("resguardd.enabled={}", enabled);
+    println!("resguardd.active={}", active);
+    if !enabled {
+        println!("fix: sudo systemctl enable resguardd.service");
+    }
+    if !active {
+        println!("fix: sudo systemctl start resguardd.service");
+    }
+    Ok(if enabled && active { 0 } else { 1 })
 }
 
 fn read_meminfo_kb(field: &str) -> Option<u64> {
@@ -2934,6 +2987,29 @@ fn main() {
                 Ok(code) => code,
                 Err(err) => {
                     eprintln!("desktop doctor failed: {err}");
+                    1
+                }
+            },
+        },
+        Commands::Daemon { cmd } => match cmd {
+            DaemonCmd::Enable => match handle_daemon_enable() {
+                Ok(code) => code,
+                Err(err) => {
+                    eprintln!("daemon enable failed: {err}");
+                    1
+                }
+            },
+            DaemonCmd::Disable => match handle_daemon_disable() {
+                Ok(code) => code,
+                Err(err) => {
+                    eprintln!("daemon disable failed: {err}");
+                    1
+                }
+            },
+            DaemonCmd::Status => match handle_daemon_status() {
+                Ok(code) => code,
+                Err(err) => {
+                    eprintln!("daemon status failed: {err}");
                     1
                 }
             },

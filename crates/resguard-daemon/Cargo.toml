@@ -1,0 +1,16 @@
+[package]
+name = "resguard-daemon"
+version = "0.2.0"
+edition = "2021"
+
+[[bin]]
+name = "resguardd"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+
+resguard-system = { path = "../resguard-system" }

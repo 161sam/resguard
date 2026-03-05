@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "crates/resguard-cli",
+  "crates/resguard-daemon",
   "crates/resguard-core",
   "crates/resguard-system",
   "crates/resguard-config",

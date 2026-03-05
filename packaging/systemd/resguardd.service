@@ -1,0 +1,14 @@
+[Unit]
+Description=Resguard freeze watchdog daemon
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/resguardd --config /etc/resguard/resguardd.yml
+Restart=always
+RestartSec=5
+User=root
+Group=root
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,9 @@
+memory_avg10_threshold: 10.0
+cpu_avg10_threshold: 10.0
+hold_seconds: 5
+cooldown_seconds: 60
+action: panic
+action_duration_seconds: 60
+poll_interval_ms: 1000
+# Optional file log in addition to journald/stdout:
+# log_file: /var/log/resguardd.log

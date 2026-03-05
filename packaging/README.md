@@ -27,12 +27,12 @@ The DEB installs and/or ensures these paths:
 Expected output artifact:
 
 ```bash
-resguard_0.1.0_amd64.deb
+resguard_0.2.0_amd64.deb
 ```
 
 ## Install
 
 ```bash
-sudo dpkg -i resguard_0.1.0_amd64.deb
+sudo dpkg -i resguard_0.2.0_amd64.deb
 resguard --help
 ```

@@ -2,12 +2,13 @@
 
 Resguard ist ein natives Linux-Tool für Ressourcen-Isolation mit systemd slices und cgroups v2.
 
-## Aktueller Stand (v0.1)
+## Aktueller Stand (v0.2)
 
 Implementiert:
 
 - Profilschema + Validation
 - `init`, `apply`, `rollback`, `run`, `status`
+- `desktop list`, `desktop wrap`, `desktop unwrap`, `desktop doctor`
 - `--root`-Isolation für sichere Testläufe ohne `/etc` zu ändern
 - State/Backup/Manifest für Rollback
 
@@ -90,3 +91,16 @@ cargo run -p resguard -- status
 - [Design](docs/design.md)
 - [Safety](docs/safety.md)
 - [Profiles](docs/profiles.md)
+
+## Release / Tagging
+
+v0.2.0 Release vorbereiten und taggen:
+
+```bash
+git checkout main
+git pull --ff-only
+cargo build
+cargo test
+git tag -a v0.2.0 -m "resguard v0.2.0"
+git push origin v0.2.0
+```

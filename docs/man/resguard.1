@@ -1,4 +1,4 @@
-.TH RESGUARD 1 "March 2026" "resguard 0.1.0" "User Commands"
+.TH RESGUARD 1 "March 2026" "resguard 0.2.0" "User Commands"
 .SH NAME
 resguard \- Linux system resource guard using systemd slices
 
@@ -62,9 +62,24 @@ Implemented in v0.1: validate.
 Other subcommands are CLI stubs.
 
 .TP
-.B desktop <subcommand>
-Desktop wrapper namespace for v0.2 planning.
-Current subcommands are CLI stubs.
+.B desktop list [--filter <regex>] [--origin user|system|all]
+List discovered desktop entries from XDG application directories.
+
+.TP
+.B desktop wrap <desktop_id> --class <class> [--force]
+Create a user-local wrapper desktop entry that runs through:
+.B resguard run --class <class> -- <original Exec>.
+Mapping is written to
+.I ~/.config/resguard/desktop-mapping.yml.
+
+.TP
+.B desktop unwrap <desktop_id> --class <class>
+Remove a previously generated wrapper and its mapping entry.
+
+.TP
+.B desktop doctor
+Validate wrapper files, PATH availability, and user slice presence.
+Prints copy-paste fixes for apply/reload steps.
 
 .SH GLOBAL OPTIONS
 .TP
@@ -104,6 +119,9 @@ resguard apply demo --dry-run --root /tmp/rg
 resguard apply demo --root /tmp/rg
 resguard rollback --last --root /tmp/rg
 resguard run --class browsers -- firefox
+resguard desktop list --origin all
+resguard desktop wrap firefox.desktop --class browsers
+resguard desktop doctor
 resguard doctor
 resguard metrics
 .fi
@@ -136,6 +154,14 @@ Managed class slices (system manager).
 .TP
 .I /etc/systemd/user/resguard-*.slice
 Managed class slices (user manager).
+
+.TP
+.I ~/.local/share/applications/*.resguard-*.desktop
+Managed desktop wrappers.
+
+.TP
+.I ~/.config/resguard/desktop-mapping.yml
+Desktop wrapper mapping store.
 
 .SH SECURITY
 resguard modifies resource-related systemd configuration.

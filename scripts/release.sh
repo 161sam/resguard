@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONTROL_FILE="$ROOT_DIR/packaging/deb/control"
+RELEASE_ASSETS_DIR="$ROOT_DIR/release-assets"
 
 usage() {
   cat <<'USAGE'
@@ -96,6 +97,37 @@ action() {
   fi
 }
 
+stage_release_assets() {
+  local artifact_path="$1"
+  local artifact_name
+  artifact_name="$(basename "$artifact_path")"
+  local staged_artifact="$RELEASE_ASSETS_DIR/$artifact_name"
+  local sums_file="$RELEASE_ASSETS_DIR/SHA256SUMS"
+
+  mkdir -p "$RELEASE_ASSETS_DIR"
+
+  if [[ $DRY_RUN -eq 1 ]]; then
+    if [[ -f "$artifact_path" ]]; then
+      cp -f "$artifact_path" "$staged_artifact"
+      echo "[dry-run] staged existing artifact: $staged_artifact"
+    else
+      printf "dry-run placeholder for %s\n" "$artifact_name" > "$staged_artifact"
+      echo "[dry-run] staged placeholder artifact: $staged_artifact"
+    fi
+  else
+    if [[ ! -f "$artifact_path" ]]; then
+      echo "error: expected artifact not found: $artifact_path" >&2
+      exit 1
+    fi
+    cp -f "$artifact_path" "$staged_artifact"
+  fi
+
+  (cd "$RELEASE_ASSETS_DIR" && sha256sum "$artifact_name" > "$sums_file")
+  echo "release-assets staged:"
+  echo "  - $staged_artifact"
+  echo "  - $sums_file"
+}
+
 for file in "${CARGO_TOMLS[@]}"; do
   if [[ ! -f "$file" ]]; then
     echo "error: missing file $file" >&2
@@ -114,7 +146,11 @@ else
 fi
 
 ARTIFACT="resguard_${VERSION}_amd64.deb"
-echo "expected artifact: $ROOT_DIR/$ARTIFACT"
+ARTIFACT_PATH="$ROOT_DIR/$ARTIFACT"
+echo "expected artifact: $ARTIFACT_PATH"
+
+echo "staging release assets"
+stage_release_assets "$ARTIFACT_PATH"
 
 echo
 echo "next tag commands:"
@@ -122,3 +158,13 @@ echo "  git add crates/*/Cargo.toml packaging/deb/control"
 echo "  git commit -m 'chore(release): cut v$VERSION'"
 echo "  git tag -a v$VERSION -m 'resguard v$VERSION'"
 echo "  git push origin <branch> --follow-tags"
+
+echo
+echo "github release checklist:"
+echo "  [ ] changelog section reviewed: CHANGELOG.md"
+echo "  [ ] release notes snippet: docs/releases/v$VERSION.md"
+echo "  [ ] create tag: git tag -a v$VERSION -m 'resguard v$VERSION'"
+echo "  [ ] push tag: git push origin v$VERSION"
+echo "  [ ] upload assets:"
+echo "      - release-assets/$ARTIFACT"
+echo "      - release-assets/SHA256SUMS"

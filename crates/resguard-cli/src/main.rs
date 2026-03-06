@@ -57,6 +57,8 @@ use ratatui::Terminal;
 struct Cli {
     #[arg(long, global = true, default_value = "table")]
     format: String,
+    #[arg(long, global = true, help = "Emit structured logs to stderr")]
+    json_log: bool,
     #[arg(long, global = true)]
     verbose: bool,
     #[arg(long, global = true)]
@@ -315,9 +317,45 @@ struct Suggestion {
 
 fn print_global_context(cli: &Cli) {
     println!(
-        "format={} verbose={} quiet={} no_color={} root={} config_dir={} state_dir={}",
-        cli.format, cli.verbose, cli.quiet, cli.no_color, cli.root, cli.config_dir, cli.state_dir
+        "format={} json_log={} verbose={} quiet={} no_color={} root={} config_dir={} state_dir={}",
+        cli.format,
+        cli.json_log,
+        cli.verbose,
+        cli.quiet,
+        cli.no_color,
+        cli.root,
+        cli.config_dir,
+        cli.state_dir
     );
+}
+
+fn json_log_enabled(cli: &Cli) -> bool {
+    let env_val = env::var("RESGUARD_LOG").ok();
+    json_log_enabled_from_env(cli.json_log, env_val.as_deref())
+}
+
+fn json_log_enabled_from_env(flag: bool, env_value: Option<&str>) -> bool {
+    flag || env_value.is_some_and(|v| v.eq_ignore_ascii_case("json"))
+}
+
+fn emit_log(json_log: bool, level: &str, event: &str, message: &str) {
+    if !json_log {
+        return;
+    }
+    let payload = serde_json::json!({
+        "level": level,
+        "event": event,
+        "message": message
+    });
+    eprintln!("{payload}");
+}
+
+fn partial_exit_code(partial: bool) -> i32 {
+    if partial {
+        1
+    } else {
+        0
+    }
 }
 
 fn handle_completion(shell: CompletionShell) -> Result<i32> {
@@ -1942,7 +1980,7 @@ fn handle_doctor(root: &str, state_dir: &str) -> Result<i32> {
         partial = true;
     }
 
-    Ok(if partial { 1 } else { 0 })
+    Ok(partial_exit_code(partial))
 }
 
 fn run_systemctl_service_action(action: &str, service: &str) -> Result<i32> {
@@ -2137,7 +2175,7 @@ fn handle_metrics() -> Result<i32> {
         }
     }
 
-    Ok(if partial { 1 } else { 0 })
+    Ok(partial_exit_code(partial))
 }
 
 #[cfg(feature = "tui")]
@@ -2272,18 +2310,14 @@ fn print_tui_summary(snapshot: &TuiSnapshot, no_top: bool) -> i32 {
         }
     }
 
-    if partial {
-        1
-    } else {
-        0
-    }
+    partial_exit_code(partial)
 }
 
 #[cfg(feature = "tui")]
 fn handle_tui(interval_ms: u64, no_top: bool) -> Result<i32> {
     println!("command=tui");
     if interval_ms == 0 {
-        return Err(anyhow!("--interval must be > 0"));
+        return Ok(2);
     }
 
     if !io::stdout().is_terminal() {
@@ -3378,7 +3412,12 @@ fn handle_panic(root: &str, duration: Option<String>) -> Result<i32> {
 
 fn main() {
     let cli = Cli::parse();
-    if !matches!(&cli.command, Commands::Completion { .. }) {
+    let json_log = json_log_enabled(&cli);
+    let is_completion = matches!(&cli.command, Commands::Completion { .. });
+    if !is_completion {
+        emit_log(json_log, "INFO", "cli.start", "starting command");
+    }
+    if !is_completion {
         print_global_context(&cli);
     }
     let format = cli.format.clone();
@@ -3495,7 +3534,12 @@ fn main() {
         },
         #[cfg(feature = "tui")]
         Commands::Tui { interval, no_top } => match handle_tui(interval, no_top) {
-            Ok(code) => code,
+            Ok(code) => {
+                if code == 2 {
+                    eprintln!("invalid arguments: --interval must be > 0");
+                }
+                code
+            }
             Err(err) => {
                 eprintln!("tui failed: {err}");
                 1
@@ -3755,6 +3799,14 @@ fn main() {
         },
     };
 
+    if !is_completion {
+        emit_log(
+            json_log,
+            "INFO",
+            "cli.exit",
+            &format!("exit_code={exit_code}"),
+        );
+    }
     process::exit(exit_code);
 }
 
@@ -4162,6 +4214,15 @@ mod tests {
                 "vmstat 1".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn json_log_mode_flag_and_env_resolution() {
+        assert!(json_log_enabled_from_env(true, None));
+        assert!(json_log_enabled_from_env(false, Some("json")));
+        assert!(json_log_enabled_from_env(false, Some("JSON")));
+        assert!(!json_log_enabled_from_env(false, Some("table")));
+        assert!(!json_log_enabled_from_env(false, None));
     }
 
     #[test]

@@ -7,12 +7,19 @@ Binary: `resguard`
 Die folgenden Flags sind global und funktionieren vor oder nach dem Subcommand:
 
 - `--format <table|json|yaml>` (default: `table`)
+- `--json-log` (optionale strukturierte Logs auf stderr)
 - `--verbose`
 - `--quiet`
 - `--no-color`
 - `--root <path>` (default: `/`)
 - `--state-dir <path>` (default: `/var/lib/resguard`)
 - `--config-dir <path>` (default: `/etc/resguard`)
+
+Logging:
+
+- alternativ zu `--json-log` kann `RESGUARD_LOG=json` gesetzt werden
+- betrifft nur Logs (stderr), nicht den strukturierten Command-Output (stdout)
+- Completion-Output bleibt unverändert (keine Log-Zeilen)
 
 ### `--root` Verhalten (konkret)
 `--root` isoliert Dateipfade für Config/State/Systemd-Dateien:

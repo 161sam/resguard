@@ -107,6 +107,12 @@ Prints copy-paste fixes for apply/reload steps.
 Output format. Default: table.
 
 .TP
+.B --json-log
+Emit structured JSON logs to stderr.
+Alternatively set
+.B RESGUARD_LOG=json .
+
+.TP
 .B --root <path>
 Root prefix for filesystem operations. Default: /.
 Useful for integration testing without writing to host /etc or /var.

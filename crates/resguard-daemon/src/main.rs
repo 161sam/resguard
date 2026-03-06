@@ -128,7 +128,13 @@ impl Logger {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let line = format!("ts={ts} level={level} event={event} msg=\"{msg}\"");
+        let line = serde_json::json!({
+            "ts": ts,
+            "level": level,
+            "event": event,
+            "msg": msg
+        })
+        .to_string();
         println!("{line}");
         if let Some(path) = &self.file_path {
             let _ = append_line(path, &line);

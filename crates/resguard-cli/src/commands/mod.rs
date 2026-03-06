@@ -1,0 +1,10 @@
+pub(crate) mod apply;
+pub(crate) mod daemon;
+pub(crate) mod desktop;
+pub(crate) mod doctor;
+pub(crate) mod metrics;
+pub(crate) mod rescue;
+pub(crate) mod setup;
+pub(crate) mod suggest;
+#[cfg(feature = "tui")]
+pub(crate) mod tui;

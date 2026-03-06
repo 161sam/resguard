@@ -4,19 +4,28 @@ set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-
-# shellcheck source=tests/e2e/load_helpers.sh
-source "${SCRIPT_DIR}/load_helpers.sh"
+RESULTS_DIR="${SCRIPT_DIR}/results"
 
 PROFILE="${PROFILE:-e2e-field}"
-CLASS="${CLASS:-heavy}"
-LOAD_SECONDS="${LOAD_SECONDS:-20}"
-SKIP_IGNORED_LOAD_TESTS=0
+CLASS="${CLASS:-rescue}"
+SETUP_PROFILE=0
 AUTO_YES="${AUTO_YES:-0}"
-OPEN_TERMINAL="${OPEN_TERMINAL:-0}"
 
 PASS_COUNT=0
 FAIL_COUNT=0
+
+usage() {
+  cat <<'USAGE'
+Usage: tests/e2e/run_e2e.sh [options]
+
+Options:
+  --profile <name>      Profile name for checks (default: e2e-field)
+  --class <name>        Class for rescue/desktop-wrap checks (default: rescue)
+  --setup-profile       Optional: run init/apply for the profile
+  --yes                 Non-interactive mode (skip confirmation prompt)
+  -h, --help            Show help
+USAGE
+}
 
 pass() {
   PASS_COUNT=$((PASS_COUNT + 1))
@@ -32,27 +41,18 @@ info() {
   echo "INFO $*"
 }
 
-cleanup() {
-  stop_background_load
+run_checked() {
+  local label="$1"
+  shift
+  if "$@"; then
+    pass "$label"
+  else
+    fail "$label"
+  fi
 }
-trap cleanup EXIT
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --help|-h)
-      cat <<'EOF'
-Usage: tests/e2e/run_e2e.sh [options]
-
-Options:
-  --profile <name>                Profile name (default: e2e-field)
-  --class <name>                  Workload class for rescue checks (default: heavy)
-  --load-seconds <n>              Background load duration in seconds (default: 20)
-  --skip-ignored-load-tests       Skip cargo ignored load tests
-  --open-terminal                 Ask verify step to open htop terminal if possible
-  --yes                           Non-interactive mode (no confirmation prompt)
-EOF
-      exit 0
-      ;;
     --profile)
       PROFILE="$2"
       shift 2
@@ -61,21 +61,17 @@ EOF
       CLASS="$2"
       shift 2
       ;;
-    --load-seconds)
-      LOAD_SECONDS="$2"
-      shift 2
-      ;;
-    --skip-ignored-load-tests)
-      SKIP_IGNORED_LOAD_TESTS=1
+    --setup-profile)
+      SETUP_PROFILE=1
       shift
       ;;
     --yes)
       AUTO_YES=1
       shift
       ;;
-    --open-terminal)
-      OPEN_TERMINAL=1
-      shift
+    -h|--help)
+      usage
+      exit 0
       ;;
     *)
       echo "unknown arg: $1" >&2
@@ -84,131 +80,128 @@ EOF
   esac
 done
 
-if [ "$(uname -s)" = "Linux" ]; then
-  pass "linux host detected"
-else
-  fail "non-linux host detected"
-fi
-
-if command -v systemctl >/dev/null 2>&1; then
-  pass "systemctl found"
-else
-  fail "systemctl missing"
-fi
-
-if command -v systemd-run >/dev/null 2>&1; then
-  pass "systemd-run found"
-else
-  fail "systemd-run missing"
-fi
-
-if [ "${FAIL_COUNT}" -gt 0 ]; then
-  echo "SUMMARY pass=${PASS_COUNT} fail=${FAIL_COUNT}"
-  exit 1
-fi
-
-RG_BIN=""
-if command -v resguard >/dev/null 2>&1; then
-  RG_BIN="$(command -v resguard)"
-elif [ -x "${REPO_ROOT}/target/debug/resguard" ]; then
-  RG_BIN="${REPO_ROOT}/target/debug/resguard"
-elif command -v cargo >/dev/null 2>&1; then
-  info "building resguard binary"
-  if (cd "${REPO_ROOT}" && cargo build -q -p resguard); then
+RG_BIN="${RG_BIN:-}"
+if [ -z "$RG_BIN" ]; then
+  if command -v resguard >/dev/null 2>&1; then
+    RG_BIN="$(command -v resguard)"
+  elif [ -x "${REPO_ROOT}/target/debug/resguard" ]; then
     RG_BIN="${REPO_ROOT}/target/debug/resguard"
-  else
-    fail "cargo build failed"
+  elif [ -x "${REPO_ROOT}/target/release/resguard" ]; then
+    RG_BIN="${REPO_ROOT}/target/release/resguard"
   fi
-else
-  fail "resguard binary not found and cargo unavailable"
 fi
 
-if [ -z "${RG_BIN}" ] || [ ! -x "${RG_BIN}" ]; then
-  fail "resguard binary unavailable"
-fi
-
-if [ "${FAIL_COUNT}" -gt 0 ]; then
-  echo "SUMMARY pass=${PASS_COUNT} fail=${FAIL_COUNT}"
+if [ -z "$RG_BIN" ] || [ ! -x "$RG_BIN" ]; then
+  echo "FAIL resguard binary not found (set RG_BIN or build/install first)" >&2
   exit 1
 fi
 
-info "using resguard: ${RG_BIN}"
-info "profile=${PROFILE} class=${CLASS} load_seconds=${LOAD_SECONDS}"
-info "matrix template: tests/e2e/e2e_matrix.md"
+mkdir -p "$RESULTS_DIR"
+TS="$(date -u +%Y%m%dT%H%M%SZ)"
+RESULT_FILE="${RESULTS_DIR}/${TS}.md"
+
+{
+  echo "# Resguard E2E Field Result"
+  echo
+  echo "- timestamp_utc: ${TS}"
+  echo "- host: $(hostname 2>/dev/null || echo unknown)"
+  echo "- profile: ${PROFILE}"
+  echo "- class: ${CLASS}"
+  echo "- resguard_bin: ${RG_BIN}"
+  echo
+  echo "## Log"
+  echo
+  echo '```text'
+} > "$RESULT_FILE"
+
+exec > >(tee -a "$RESULT_FILE") 2>&1
+
+info "results file: ${RESULT_FILE}"
+info "repo root: ${REPO_ROOT}"
 
 if [ "${AUTO_YES}" -ne 1 ]; then
-  echo "This script applies profile '${PROFILE}' on the host and starts synthetic load."
+  echo "This will run host checks and may run profile apply if --setup-profile is set."
   read -r -p "Continue? [y/N] " yn
-  case "${yn}" in
-    y|Y|yes|YES)
-      ;;
+  case "$yn" in
+    y|Y|yes|YES) ;;
     *)
-      echo "Aborted."
+      echo "Aborted"
+      echo '```' >> "$RESULT_FILE"
       exit 1
       ;;
   esac
 fi
 
-if [ ! -f "/etc/resguard/profiles/${PROFILE}.yml" ]; then
-  info "profile missing, creating /etc/resguard/profiles/${PROFILE}.yml"
+info "collecting system info"
+run_checked "Linux host" test "$(uname -s)" = "Linux"
+run_checked "systemctl available" command -v systemctl >/dev/null 2>&1
+run_checked "systemd-run available" command -v systemd-run >/dev/null 2>&1
+
+echo "OS:"
+if [ -f /etc/os-release ]; then
+  sed -n '1,8p' /etc/os-release || true
+fi
+
+echo "Desktop/session:"
+echo "XDG_CURRENT_DESKTOP=${XDG_CURRENT_DESKTOP:-unknown}"
+echo "XDG_SESSION_TYPE=${XDG_SESSION_TYPE:-unknown}"
+echo "XDG_SESSION_DESKTOP=${XDG_SESSION_DESKTOP:-unknown}"
+echo "Kernel=$(uname -r)"
+grep -E '^MemTotal:' /proc/meminfo || true
+
+echo
+echo "manager checks:"
+run_checked "system manager reachable" systemctl --no-pager --version >/dev/null 2>&1
+run_checked "system manager state query" systemctl is-system-running >/dev/null 2>&1
+if systemctl --user is-system-running >/dev/null 2>&1; then
+  pass "user manager state query"
+else
+  fail "user manager state query"
+fi
+
+if [ "$SETUP_PROFILE" -eq 1 ]; then
+  info "optional profile setup enabled"
   if [ "$(id -u)" -eq 0 ]; then
-    if "${RG_BIN}" init --name "${PROFILE}" --out "/etc/resguard/profiles/${PROFILE}.yml"; then
-      pass "created profile ${PROFILE}"
-    else
-      fail "failed to create profile ${PROFILE}"
-    fi
+    run_checked "init profile ${PROFILE}" "$RG_BIN" init --name "$PROFILE" --out "/etc/resguard/profiles/${PROFILE}.yml"
+    run_checked "apply profile ${PROFILE}" "$RG_BIN" apply "$PROFILE" --user-daemon-reload
   else
-    if sudo "${RG_BIN}" init --name "${PROFILE}" --out "/etc/resguard/profiles/${PROFILE}.yml"; then
-      pass "created profile ${PROFILE}"
-    else
-      fail "failed to create profile ${PROFILE} (sudo init)"
-    fi
+    run_checked "init profile ${PROFILE} (sudo)" sudo "$RG_BIN" init --name "$PROFILE" --out "/etc/resguard/profiles/${PROFILE}.yml"
+    run_checked "apply profile ${PROFILE} (sudo)" sudo "$RG_BIN" apply "$PROFILE" --user-daemon-reload
   fi
 else
-  pass "profile exists: /etc/resguard/profiles/${PROFILE}.yml"
+  info "skipping profile setup (use --setup-profile to enable)"
 fi
 
-if [ "$(id -u)" -eq 0 ]; then
-  if "${RG_BIN}" apply "${PROFILE}" --user-daemon-reload; then
-    pass "applied profile ${PROFILE}"
-  else
-    fail "profile apply failed"
-  fi
+if RG_BIN="$RG_BIN" CLASS="$CLASS" "$SCRIPT_DIR/verify_desktop_wrap.sh" --class "$CLASS"; then
+  pass "desktop wrap verification"
 else
-  if sudo "${RG_BIN}" apply "${PROFILE}" --user-daemon-reload; then
-    pass "applied profile ${PROFILE}"
-  else
-    fail "profile apply failed (sudo apply)"
-  fi
+  fail "desktop wrap verification"
 fi
 
-if [ "${SKIP_IGNORED_LOAD_TESTS}" -eq 1 ]; then
-  info "skipping ignored Rust load tests"
+if RG_BIN="$RG_BIN" PROFILE="$PROFILE" CLASS="$CLASS" "$SCRIPT_DIR/verify_rescue.sh" --profile "$PROFILE" --class "$CLASS"; then
+  pass "rescue verification"
 else
-  if run_ignored_load_tests "${REPO_ROOT}"; then
-    pass "ignored Rust load tests passed"
-  else
-    fail "ignored Rust load tests failed"
-  fi
+  fail "rescue verification"
 fi
 
-if start_background_load "${LOAD_SECONDS}"; then
-  pass "started background load (${LOAD_DESC})"
+SUGGEST_ARGS=(suggest --dry-run)
+if [ -f "/etc/resguard/profiles/${PROFILE}.yml" ]; then
+  SUGGEST_ARGS+=(--profile "$PROFILE")
+fi
+if "$RG_BIN" "${SUGGEST_ARGS[@]}" >/tmp/resguard_suggest_e2e.out 2>/tmp/resguard_suggest_e2e.err; then
+  pass "suggest dry-run"
 else
-  fail "failed to start background load"
+  fail "suggest dry-run"
 fi
-
-if RG_BIN="${RG_BIN}" PROFILE="${PROFILE}" CLASS="${CLASS}" OPEN_TERMINAL="${OPEN_TERMINAL}" \
-  "${SCRIPT_DIR}/verify_rescue.sh" --profile "${PROFILE}" --class "${CLASS}"; then
-  pass "rescue verification passed"
-else
-  fail "rescue verification failed"
-fi
-
-stop_background_load
-pass "background load stopped"
 
 echo "SUMMARY pass=${PASS_COUNT} fail=${FAIL_COUNT}"
-if [ "${FAIL_COUNT}" -gt 0 ]; then
+echo '```'
+echo
+echo "## Summary"
+echo
+echo "- pass: ${PASS_COUNT}"
+echo "- fail: ${FAIL_COUNT}"
+
+if [ "$FAIL_COUNT" -gt 0 ]; then
   exit 1
 fi

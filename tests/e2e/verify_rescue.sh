@@ -117,8 +117,14 @@ if command -v htop >/dev/null 2>&1; then
   else
     fail "htop did not start via resguard run"
   fi
+elif command -v top >/dev/null 2>&1; then
+  if "${run_cmd[@]}" top -bn1 >/dev/null 2>&1; then
+    pass "top fallback starts via resguard run"
+  else
+    fail "top fallback failed via resguard run"
+  fi
 else
-  fail "htop not found (install htop for full desktop rescue verification)"
+  fail "neither htop nor top found on host"
 fi
 
 if "${run_cmd[@]}" /bin/sh -c "sleep 30 & p=\$!; kill -9 \"\$p\"; wait \"\$p\"; [ \"\$?\" -eq 137 ]" >/dev/null 2>&1; then

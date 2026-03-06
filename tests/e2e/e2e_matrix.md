@@ -1,32 +1,39 @@
-# Resguard Field Test Matrix (Ubuntu Desktop)
+# Resguard Field Test Matrix (GNOME/KDE)
 
-Use this matrix for reproducible desktop field tests with `tests/e2e/run_e2e.sh`.
+Use this matrix for reproducible field validation on Ubuntu/Kubuntu hosts.
 
-## Environment Matrix
+## Host Matrix
 
-| Desktop | Session | Kernel (`uname -r`) | RAM (`MemTotal`) | Swap | Result | Notes |
-|---|---|---|---|---|---|---|
-| GNOME | Wayland |  |  |  |  |  |
-| GNOME | X11 |  |  |  |  |  |
-| KDE Plasma | Wayland |  |  |  |  |  |
-| KDE Plasma | X11 |  |  |  |  |  |
+| Host | Desktop | Session | Kernel | RAM | Script Result | Result File | Notes |
+|---|---|---|---|---|---|---|---|
+| Ubuntu 24.04 | GNOME | Wayland |  |  |  |  |  |
+| Ubuntu 24.04 | GNOME | X11 |  |  |  |  |  |
+| Kubuntu 24.04 | KDE Plasma | Wayland |  |  |  |  |  |
+| Kubuntu 24.04 | KDE Plasma | X11 |  |  |  |  |  |
 
-## Repro Steps
+## Execute
 
-1. Run `tests/e2e/run_e2e.sh --profile e2e-field --class heavy`.
-2. Record environment:
-   - Desktop/session: `echo "$XDG_CURRENT_DESKTOP / $XDG_SESSION_TYPE"`
-   - Kernel: `uname -r`
-   - RAM: `grep MemTotal /proc/meminfo`
-3. Copy PASS/FAIL summary from script output into the matrix.
-4. If FAIL, attach:
-   - failing check name
-   - exact stderr/stdout snippet
-   - whether `stress-ng` was used
+```bash
+tests/e2e/run_e2e.sh --profile e2e-field --class rescue
+```
 
-## Success Criteria
+Optional profile bootstrap/apply:
 
-- Command responsiveness: `resguard run ... --wait -- true` completes in <= 2000 ms.
-- `htop` starts via `resguard run` (checked with `htop --help` execution in class/slice).
-- Force kill path works (`kill -9` returns expected killed status path).
+```bash
+tests/e2e/run_e2e.sh --profile e2e-field --class rescue --setup-profile
+```
 
+## What `run_e2e.sh` covers
+
+- system information snapshot (`os-release`, kernel, memory, desktop/session env)
+- desktop/user manager checks (`systemctl`, `systemctl --user`)
+- desktop wrap validation (`verify_desktop_wrap.sh`)
+- rescue path validation (`verify_rescue.sh`)
+- suggest dry-run execution (`resguard suggest --dry-run`)
+- markdown result capture in `tests/e2e/results/<timestamp>.md`
+
+## PASS/FAIL Criteria
+
+- Script summary reports `fail=0`.
+- `verify_rescue.sh` and `verify_desktop_wrap.sh` both pass.
+- Result markdown file is generated in `tests/e2e/results/`.

@@ -52,6 +52,19 @@ Start a command in a class slice via systemd-run.
 Supports --wait and optional --no-check override.
 
 .TP
+.B rescue [--class rescue] [--command <cmd>] [--no-ui] [--no-check]
+Start a monitoring rescue shell through
+.B run
+with default
+.B "$SHELL -lc 'htop || top'".
+If the rescue class/slice is missing, prints apply/fix guidance.
+With
+.B --no-check
+it can fallback to
+.B system.slice
+as a poweruser override.
+
+.TP
 .B panic [--duration <Ns|Nm|Nh>]
 Temporarily tighten user.slice runtime limits via systemctl set-property.
 
@@ -119,6 +132,8 @@ resguard apply demo --dry-run --root /tmp/rg
 resguard apply demo --root /tmp/rg
 resguard rollback --last --root /tmp/rg
 resguard run --class browsers -- firefox
+resguard rescue
+resguard rescue --command "vmstat 1"
 resguard desktop list --origin all
 resguard desktop wrap firefox.desktop --class browsers
 resguard desktop doctor

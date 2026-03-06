@@ -157,6 +157,35 @@ Exit:
 
 ---
 
+## `resguard rescue`
+Syntax:
+
+- `resguard rescue [--class rescue] [--command <cmd>] [--no-ui] [--no-check]`
+
+Default:
+
+- startet über `run` in der Klasse `rescue`:
+  - `resguard run --class rescue -- $SHELL -lc "htop || top"`
+- Shell-Auflösung:
+  - `$SHELL`, sonst `/bin/bash`, sonst `/bin/sh`
+
+Flags:
+
+- `--class <name>`: andere Klasse statt `rescue`
+- `--command <cmd>`: führt benutzerdefinierten Shell-Command via `-lc` aus
+- `--no-ui`: startet nur eine interaktive Shell (kein `htop/top`)
+- `--no-check`: wenn Klasse/Slice nicht auflösbar ist, Fallback auf `system.slice`
+
+Fehler-/Fix-Hinweise bei fehlendem Slice:
+
+- zeigt konkrete Schritte:
+  - Profil mit Klasse prüfen/anlegen
+  - `sudo resguard apply <profile> --user-daemon-reload`
+  - `resguard rescue` erneut ausführen
+- optionaler Poweruser-Fallback: `resguard rescue --no-check`
+
+---
+
 ## `resguard status`
 Best-effort Diagnose:
 

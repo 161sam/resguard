@@ -156,6 +156,19 @@ enum Commands {
         #[arg(last = true, required = true)]
         command: Vec<String>,
     },
+    Rescue {
+        #[arg(long, default_value = "rescue")]
+        class: String,
+        #[arg(long, help = "Custom shell command to run instead of htop/top")]
+        command: Option<String>,
+        #[arg(long, help = "Start an interactive shell without launching htop/top")]
+        no_ui: bool,
+        #[arg(
+            long,
+            help = "If rescue class/slice is missing, fallback to system.slice (unsafe, poweruser only)"
+        )]
+        no_check: bool,
+    },
     Profile {
         #[command(subcommand)]
         cmd: ProfileCmd,
@@ -462,6 +475,17 @@ fn build_auto_profile(name: &str, total_mem_bytes: u64, cpu_cores: u32) -> Profi
             cpu_weight: Some(90),
             oomd_memory_pressure: Some("kill".to_string()),
             oomd_memory_pressure_limit: Some("50%".to_string()),
+        },
+    );
+    classes.insert(
+        "rescue".to_string(),
+        Class {
+            slice_name: Some("resguard-rescue.slice".to_string()),
+            memory_high: None,
+            memory_max: Some("1G".to_string()),
+            cpu_weight: Some(100),
+            oomd_memory_pressure: Some("kill".to_string()),
+            oomd_memory_pressure_limit: Some("70%".to_string()),
         },
     );
 
@@ -1014,6 +1038,34 @@ fn resolve_class_slice(profile: &Profile, class_name: &str) -> Option<String> {
     None
 }
 
+fn default_shell_path() -> String {
+    if let Ok(shell) = env::var("SHELL") {
+        let trimmed = shell.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    if Path::new("/bin/bash").exists() {
+        "/bin/bash".to_string()
+    } else {
+        "/bin/sh".to_string()
+    }
+}
+
+fn build_rescue_command(shell: &str, custom_command: Option<&str>, no_ui: bool) -> Vec<String> {
+    if let Some(cmd) = custom_command {
+        return vec![shell.to_string(), "-lc".to_string(), cmd.to_string()];
+    }
+    if no_ui {
+        return vec![shell.to_string()];
+    }
+    vec![
+        shell.to_string(),
+        "-lc".to_string(),
+        "htop || top".to_string(),
+    ]
+}
+
 fn handle_run(root: &str, config_dir: &str, state_dir: &str, req: RunRequest) -> Result<i32> {
     println!("command=run");
     println!(
@@ -1124,6 +1176,68 @@ fn handle_run(root: &str, config_dir: &str, state_dir: &str, req: RunRequest) ->
         Ok(0)
     } else {
         Ok(6)
+    }
+}
+
+fn handle_rescue(
+    root: &str,
+    config_dir: &str,
+    state_dir: &str,
+    class: String,
+    custom_command: Option<String>,
+    no_ui: bool,
+    no_check: bool,
+) -> Result<i32> {
+    println!("command=rescue");
+    let shell = default_shell_path();
+    let command = build_rescue_command(&shell, custom_command.as_deref(), no_ui);
+    println!(
+        "class={} shell={} command={:?} no_ui={} no_check={}",
+        class, shell, command, no_ui, no_check
+    );
+
+    let base_req = RunRequest {
+        class: class.clone(),
+        profile_override: None,
+        slice_override: None,
+        no_check: false,
+        wait: false,
+        command: command.clone(),
+    };
+
+    match handle_run(root, config_dir, state_dir, base_req) {
+        Ok(code) => Ok(code),
+        Err(err) => {
+            let msg = err.to_string();
+            let rescue_target_missing = msg.contains("class '")
+                || msg.contains("slice not found")
+                || msg.contains("slice check failed");
+            if no_check && rescue_target_missing {
+                eprintln!(
+                    "warn: rescue class/slice unavailable; falling back to system.slice due to --no-check"
+                );
+                return handle_run(
+                    root,
+                    config_dir,
+                    state_dir,
+                    RunRequest {
+                        class,
+                        profile_override: None,
+                        slice_override: Some("system.slice".to_string()),
+                        no_check: true,
+                        wait: false,
+                        command,
+                    },
+                );
+            }
+            if rescue_target_missing {
+                return Err(anyhow!(
+                    "{err}\nrescue fix:\n  1) apply/create a profile that defines class '{}' (auto profiles include it)\n  2) sudo resguard apply <profile> --user-daemon-reload\n  3) retry: resguard rescue\noptional fallback (unsafe): resguard rescue --no-check",
+                    class
+                ));
+            }
+            Err(err)
+        }
     }
 }
 
@@ -3455,6 +3569,26 @@ fn main() {
                 6
             }
         },
+        Commands::Rescue {
+            class,
+            command,
+            no_ui,
+            no_check,
+        } => match handle_rescue(
+            &root,
+            &config_dir,
+            &state_dir,
+            class,
+            command,
+            no_ui,
+            no_check,
+        ) {
+            Ok(code) => code,
+            Err(err) => {
+                eprintln!("rescue failed: {err}");
+                6
+            }
+        },
         Commands::Profile { cmd } => match cmd {
             ProfileCmd::List => {
                 println!("command=profile list");
@@ -3712,6 +3846,19 @@ mod tests {
             ),
             4 * gb
         );
+        assert_eq!(
+            classes["rescue"].slice_name.as_deref(),
+            Some("resguard-rescue.slice")
+        );
+        assert_eq!(
+            mem_to_bytes(
+                classes["rescue"]
+                    .memory_max
+                    .as_deref()
+                    .expect("rescue memoryMax")
+            ),
+            gb
+        );
     }
 
     #[test]
@@ -3952,6 +4099,35 @@ mod tests {
     fn wrap_exec_keeps_original_placeholders() {
         let wrapped = wrap_exec("firefox %u", "browsers");
         assert_eq!(wrapped, "resguard run --class browsers -- firefox %u");
+    }
+
+    #[test]
+    fn rescue_command_defaults_to_htop_fallback_top() {
+        let cmd = build_rescue_command("/bin/bash", None, false);
+        assert_eq!(
+            cmd,
+            vec![
+                "/bin/bash".to_string(),
+                "-lc".to_string(),
+                "htop || top".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn rescue_command_supports_no_ui_and_custom_command() {
+        let no_ui_cmd = build_rescue_command("/bin/sh", None, true);
+        assert_eq!(no_ui_cmd, vec!["/bin/sh".to_string()]);
+
+        let custom = build_rescue_command("/bin/bash", Some("vmstat 1"), false);
+        assert_eq!(
+            custom,
+            vec![
+                "/bin/bash".to_string(),
+                "-lc".to_string(),
+                "vmstat 1".to_string()
+            ]
+        );
     }
 
     #[test]

@@ -21,9 +21,27 @@ fi
 PKG_NAME="$(awk -F': ' '/^Package:/ {print $2}' "$CONTROL_FILE")"
 VERSION="$(awk -F': ' '/^Version:/ {print $2}' "$CONTROL_FILE")"
 ARCH="$(awk -F': ' '/^Architecture:/ {print $2}' "$CONTROL_FILE")"
+CLI_CARGO_TOML="$ROOT_DIR/crates/resguard-cli/Cargo.toml"
+DAEMON_CARGO_TOML="$ROOT_DIR/crates/resguard-daemon/Cargo.toml"
+CLI_VERSION="$(awk -F' = ' '/^version = / {gsub(/"/, "", $2); print $2; exit}' "$CLI_CARGO_TOML")"
+DAEMON_VERSION="$(awk -F' = ' '/^version = / {gsub(/"/, "", $2); print $2; exit}' "$DAEMON_CARGO_TOML")"
 
 if [[ -z "$PKG_NAME" || -z "$VERSION" || -z "$ARCH" ]]; then
   echo "error: invalid control file metadata" >&2
+  exit 1
+fi
+
+if [[ -z "$CLI_VERSION" || -z "$DAEMON_VERSION" ]]; then
+  echo "error: failed to read crate versions from Cargo.toml" >&2
+  exit 1
+fi
+
+if [[ "$VERSION" != "$CLI_VERSION" || "$VERSION" != "$DAEMON_VERSION" ]]; then
+  echo "error: version mismatch detected" >&2
+  echo "control version: $VERSION" >&2
+  echo "resguard-cli version: $CLI_VERSION" >&2
+  echo "resguard-daemon version: $DAEMON_VERSION" >&2
+  echo "fix: align packaging/deb/control and crate Cargo.toml versions before building" >&2
   exit 1
 fi
 

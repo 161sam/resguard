@@ -3862,6 +3862,17 @@ mod tests {
     }
 
     #[test]
+    fn auto_profile_serializes_and_validates_with_rescue_class() {
+        let profile = build_auto_profile("init-demo", 16 * 1024_u64.pow(3), 8);
+        let yaml = serde_yaml::to_string(&profile).expect("serialize profile");
+        assert!(yaml.contains("rescue:"));
+        assert!(yaml.contains("resguard-rescue.slice"));
+
+        let errors = validate_profile(&profile);
+        assert!(errors.is_empty(), "validation errors: {:?}", errors);
+    }
+
+    #[test]
     fn auto_profile_cpu_policy_respects_core_count() {
         let gb = 1024_u64.pow(3);
 
@@ -4059,6 +4070,29 @@ mod tests {
         let restored = std::fs::read_to_string(&backed_up_target).expect("restored content");
         assert_eq!(restored, "BEFORE\n");
         assert!(!created_target.exists());
+    }
+
+    #[test]
+    fn apply_writes_rescue_slice_units_for_auto_profile() {
+        let temp = tempdir().expect("tempdir");
+        let root = temp.path().join("root");
+        std::fs::create_dir_all(&root).expect("create root");
+        seed_profile(&root, "rescue-prof");
+
+        let code = handle_apply(
+            root.to_str().expect("root str"),
+            "/etc/resguard",
+            "/var/lib/resguard",
+            "rescue-prof",
+            &test_apply_opts(),
+        )
+        .expect("apply result");
+        assert_eq!(code, 0);
+
+        let system_slice = root.join("etc/systemd/system/resguard-rescue.slice");
+        let user_slice = root.join("etc/systemd/user/resguard-rescue.slice");
+        assert!(system_slice.exists(), "missing {}", system_slice.display());
+        assert!(user_slice.exists(), "missing {}", user_slice.display());
     }
 
     #[test]

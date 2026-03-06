@@ -8,7 +8,7 @@ Ein Profil beschreibt:
 - RAM-Reservierung für das System
 - RAM-Limits für User-Workloads
 - CPU-Reservierungen
-- optionale Workload-Klassen (browser, ide, heavy)
+- optionale Workload-Klassen (browsers, ide, heavy, rescue)
 - OOM-Verhalten
 - Prozessregeln (optional)
 
@@ -141,6 +141,11 @@ slices:
     heavy:
       sliceName: "resguard-heavy.slice"
       memoryMax: "5G"
+
+    rescue:
+      sliceName: "resguard-rescue.slice"
+      cpuWeight: 100
+      memoryMax: "1G"
 ```
 
 Diese werden als systemd units erzeugt.
@@ -237,6 +242,10 @@ spec:
       heavy:
         sliceName: "resguard-heavy.slice"
         memoryMax: "5G"
+
+      rescue:
+        sliceName: "resguard-rescue.slice"
+        memoryMax: "1G"
 ```
 
 ---

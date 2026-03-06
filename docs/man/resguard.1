@@ -19,6 +19,13 @@ then relies on systemd for enforcement.
 .TP
 .B init
 Auto-detect hardware and generate a profile.
+Auto profiles include classes:
+.B browsers ,
+.B ide ,
+.B heavy ,
+and
+.B rescue
+(\fIresguard-rescue.slice\fR).
 
 .TP
 .B apply <profile>

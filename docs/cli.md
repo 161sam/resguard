@@ -46,6 +46,11 @@ Syntax:
 Verhalten:
 
 - Hardware-Detect: RAM aus `/proc/meminfo`, CPU über `available_parallelism()`
+- erzeugt im Auto-Profil standardmäßig Klassen:
+  - `browsers` (`resguard-browsers.slice`)
+  - `ide` (`resguard-ide.slice`)
+  - `heavy` (`resguard-heavy.slice`)
+  - `rescue` (`resguard-rescue.slice`)
 - ohne root:
   - default write: `./<name>.yml`
 - mit root:

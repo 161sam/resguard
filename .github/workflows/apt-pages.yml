@@ -117,7 +117,7 @@ jobs:
             echo "failed to resolve imported secret key fingerprint" >&2
             exit 1
           fi
-          echo "APT_GPG_SIGNING_FPR=$FINGERPRINT" >> "$GITHUB_ENV"
+          echo "APT_GPG_KEY_ID=$FINGERPRINT" >> "$GITHUB_ENV"
 
       - name: Generate signed APT repository
         env:
@@ -134,7 +134,7 @@ jobs:
             --distribution stable \
             --component main \
             --arch amd64 \
-            --sign-key "$APT_GPG_SIGNING_FPR" \
+            --sign-key "$APT_GPG_KEY_ID" \
             --gpg-homedir "$GNUPGHOME" \
             "${PASS_ARGS[@]}" \
             --export-pubkey ./apt/pubkey.gpg

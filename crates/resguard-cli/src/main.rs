@@ -2572,7 +2572,37 @@ fn main() {
 mod tests {
     use super::*;
     use resguard_core::parse_size_to_bytes;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
     use tempfile::tempdir;
+
+    static HOME_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+    struct HomeEnvGuard {
+        old_home: Option<std::ffi::OsString>,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl HomeEnvGuard {
+        fn set(home: &Path) -> Self {
+            let lock = HOME_ENV_LOCK.get_or_init(|| Mutex::new(()));
+            let guard = lock.lock().expect("acquire HOME env lock");
+            let old_home = std::env::var_os("HOME");
+            std::env::set_var("HOME", home);
+            Self {
+                old_home,
+                _lock: guard,
+            }
+        }
+    }
+
+    impl Drop for HomeEnvGuard {
+        fn drop(&mut self) {
+            match self.old_home.take() {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
 
     fn test_apply_opts() -> ApplyOptions {
         ApplyOptions {
@@ -2919,9 +2949,7 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let home = temp.path().join("home");
         std::fs::create_dir_all(&home).expect("create home");
-
-        let old_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &home);
+        let _home_guard = HomeEnvGuard::set(&home);
 
         let path = wrapper_path_for("firefox.desktop", "browsers").expect("wrapper path");
         assert!(path.starts_with(home.join(".local/share/applications")));
@@ -2932,11 +2960,6 @@ mod tests {
 
         assert!(wrapper_path_for("../firefox.desktop", "browsers").is_err());
         assert!(wrapper_path_for("firefox.desktop", "bad/class").is_err());
-
-        match old_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
     }
 
     #[test]
@@ -3091,9 +3114,7 @@ mod tests {
             "[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox %u\n",
         )
         .expect("write source desktop");
-
-        let old_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &home);
+        let _home_guard = HomeEnvGuard::set(&home);
 
         let wrapper_path = wrapper_path_for("firefox.desktop", "browsers").expect("wrapper path");
         let mapping_path = desktop_mapping_path().expect("mapping path");
@@ -3127,11 +3148,6 @@ mod tests {
         assert_eq!(print_code, 0);
         assert!(!wrapper_path.exists());
         assert!(!mapping_path.exists());
-
-        match old_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
     }
 
     #[test]
@@ -3145,9 +3161,7 @@ mod tests {
             "[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox %u\n",
         )
         .expect("write source desktop");
-
-        let old_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &home);
+        let _home_guard = HomeEnvGuard::set(&home);
 
         let err = handle_desktop_wrap(
             "firefox.desktop",
@@ -3161,11 +3175,6 @@ mod tests {
         )
         .expect_err("override without force should fail");
         assert!(err.to_string().contains("--override"));
-
-        match old_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
     }
 
     #[test]
@@ -3177,9 +3186,7 @@ mod tests {
         let source_path = apps.join("firefox.desktop");
         let original = "[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox %u\n";
         std::fs::write(&source_path, original).expect("write source desktop");
-
-        let old_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", &home);
+        let _home_guard = HomeEnvGuard::set(&home);
 
         let wrap_code = handle_desktop_wrap(
             "firefox.desktop",
@@ -3207,10 +3214,5 @@ mod tests {
         assert_eq!(unwrap_code, 0);
         let restored = std::fs::read_to_string(&source_path).expect("read restored content");
         assert_eq!(restored, original);
-
-        match old_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
     }
 }

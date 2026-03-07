@@ -28,8 +28,6 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    outputs:
-      signing_ready: ${{ steps.signing_guard.outputs.signing_ready }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -68,27 +66,7 @@ jobs:
           echo "TAG_REF=$TAG_REF" >> "$GITHUB_ENV"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
-      - name: Check signing secret availability
-        id: signing_guard
-        env:
-          RESGUARD_APT_GPG_PRIVATE_KEY: ${{ secrets.RESGUARD_APT_GPG_PRIVATE_KEY }}
-        run: |
-          set -euo pipefail
-          if [[ -n "${RESGUARD_APT_GPG_PRIVATE_KEY}" ]]; then
-            echo "signing_ready=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "signing_ready=false" >> "$GITHUB_OUTPUT"
-          {
-            echo "### APT publish skipped"
-            echo
-            echo "Missing secret: \`RESGUARD_APT_GPG_PRIVATE_KEY\`."
-            echo "Release assets are still published by \`release-upload.yml\`."
-            echo "After adding the secret, rerun this workflow with \`workflow_dispatch\` using \`release_tag\` and the desired \`source_ref\`."
-          } >> "$GITHUB_STEP_SUMMARY"
-
       - name: Build DEB artifacts
-        if: steps.signing_guard.outputs.signing_ready == 'true'
         run: |
           set -euo pipefail
           mkdir -p release-assets
@@ -100,7 +78,6 @@ jobs:
           mv "resguard_${VERSION}_amd64.deb" "release-assets/resguard_${VERSION}_amd64_daemon.deb"
 
       - name: Import APT signing key
-        if: steps.signing_guard.outputs.signing_ready == 'true'
         env:
           RESGUARD_APT_GPG_PRIVATE_KEY: ${{ secrets.RESGUARD_APT_GPG_PRIVATE_KEY }}
         run: |
@@ -114,16 +91,35 @@ jobs:
           chmod 700 "$GNUPGHOME"
           echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
 
-          printf '%s' "$RESGUARD_APT_GPG_PRIVATE_KEY" | gpg --batch --import
-          KEY_ID="$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')"
-          if [[ -z "$KEY_ID" ]]; then
-            echo "failed to resolve secret key id after import" >&2
+          KEY_FILE="$(mktemp)"
+          cleanup() {
+            rm -f "$KEY_FILE"
+          }
+          trap cleanup EXIT
+
+          printf '%s' "$RESGUARD_APT_GPG_PRIVATE_KEY" > "$KEY_FILE"
+          if ! gpg --batch --homedir "$GNUPGHOME" --import "$KEY_FILE"; then
+            echo "failed to import RESGUARD_APT_GPG_PRIVATE_KEY into GNUPGHOME" >&2
             exit 1
           fi
-          echo "APT_GPG_KEY_ID=$KEY_ID" >> "$GITHUB_ENV"
+
+          echo "Imported secret keys:"
+          gpg --batch --homedir "$GNUPGHOME" --list-secret-keys --keyid-format LONG
+
+          SECRET_KEY_COUNT="$(gpg --batch --homedir "$GNUPGHOME" --list-secret-keys --with-colons | awk -F: '/^sec:/ {c++} END {print c+0}')"
+          if [[ "$SECRET_KEY_COUNT" -eq 0 ]]; then
+            echo "no secret keys found after import" >&2
+            exit 1
+          fi
+
+          FINGERPRINT="$(gpg --batch --homedir "$GNUPGHOME" --list-secret-keys --with-colons | awk -F: '/^fpr:/ {print $10; exit}')"
+          if [[ -z "$FINGERPRINT" ]]; then
+            echo "failed to resolve imported secret key fingerprint" >&2
+            exit 1
+          fi
+          echo "APT_GPG_SIGNING_FPR=$FINGERPRINT" >> "$GITHUB_ENV"
 
       - name: Generate signed APT repository
-        if: steps.signing_guard.outputs.signing_ready == 'true'
         env:
           RESGUARD_APT_GPG_PASSPHRASE: ${{ secrets.RESGUARD_APT_GPG_PASSPHRASE }}
         run: |
@@ -138,24 +134,29 @@ jobs:
             --distribution stable \
             --component main \
             --arch amd64 \
-            --sign-key "$APT_GPG_KEY_ID" \
+            --sign-key "$APT_GPG_SIGNING_FPR" \
             --gpg-homedir "$GNUPGHOME" \
             "${PASS_ARGS[@]}" \
             --export-pubkey ./apt/pubkey.gpg
 
       - name: Configure Pages
-        if: steps.signing_guard.outputs.signing_ready == 'true'
         uses: actions/configure-pages@v5
 
       - name: Upload Pages artifact
-        if: steps.signing_guard.outputs.signing_ready == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./apt
 
+      - name: Cleanup GnuPG home
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -n "${GNUPGHOME:-}" ]]; then
+            rm -rf "$GNUPGHOME"
+          fi
+
   deploy:
     needs: build
-    if: needs.build.outputs.signing_ready == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

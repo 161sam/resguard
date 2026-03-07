@@ -69,7 +69,7 @@ On tag push (`v*`), GitHub Actions runs:
 If `RESGUARD_APT_GPG_PRIVATE_KEY` is missing:
 
 - release assets are still published by `release-upload.yml`
-- APT workflow is skipped with an explicit summary message
+- `APT Repository Pages` fails explicitly during key import (no unsigned APT publish)
 - after adding the secret, rerun `APT Repository Pages` via `workflow_dispatch` with `release_tag=<tag>` and `source_ref=<ref>`
 
 ## Backfill an existing tag

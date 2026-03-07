@@ -1,15 +1,17 @@
 use crate::*;
 
-pub(crate) fn handle_suggest(
-    format: &str,
-    root: &str,
-    config_dir: &str,
-    state_dir: &str,
-    profile: Option<String>,
-    apply: bool,
-    dry_run: bool,
-    confidence_threshold: u8,
-) -> Result<i32> {
+pub(crate) fn handle_suggest(req: SuggestRequest) -> Result<i32> {
+    let SuggestRequest {
+        format,
+        root,
+        config_dir,
+        state_dir,
+        profile,
+        apply,
+        dry_run,
+        confidence_threshold,
+    } = req;
+
     if apply && dry_run {
         return Err(anyhow!(
             "invalid arguments: --apply and --dry-run cannot be combined"
@@ -26,7 +28,7 @@ pub(crate) fn handle_suggest(
     );
 
     let (resolved_profile_name, resolved_profile) =
-        resolve_suggest_profile(root, config_dir, state_dir, profile.as_deref())?;
+        resolve_suggest_profile(&root, &config_dir, &state_dir, profile.as_deref())?;
     if let Some(name) = &resolved_profile_name {
         println!("profile_source={name}");
     } else {
@@ -111,7 +113,7 @@ pub(crate) fn handle_suggest(
         return Ok(0);
     }
 
-    match format {
+    match format.as_str() {
         "json" => println!("{}", serde_json::to_string_pretty(&suggestions)?),
         "yaml" => println!("{}", serde_yaml::to_string(&suggestions)?),
         _ => print_suggestions_table(&suggestions),

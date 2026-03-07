@@ -295,6 +295,18 @@ struct RunRequest {
     command: Vec<String>,
 }
 
+#[derive(Debug)]
+struct SuggestRequest {
+    format: String,
+    root: String,
+    config_dir: String,
+    state_dir: String,
+    profile: Option<String>,
+    apply: bool,
+    dry_run: bool,
+    confidence_threshold: u8,
+}
+
 #[derive(Debug, Clone, Copy)]
 struct DesktopWrapOptions {
     force: bool,
@@ -1067,8 +1079,7 @@ fn systemctl_user_show_scope(scope: &str) -> Result<BTreeMap<String, String>> {
 }
 
 fn parse_first_exec_token(exec: &str) -> Option<String> {
-    let mut iter = exec.split_whitespace().peekable();
-    while let Some(tok) = iter.next() {
+    for tok in exec.split_whitespace() {
         if tok == "env" {
             continue;
         }
@@ -1273,28 +1284,6 @@ fn print_suggestions_table(suggestions: &[Suggestion]) {
             s.reason
         );
     }
-}
-
-fn handle_suggest(
-    format: &str,
-    root: &str,
-    config_dir: &str,
-    state_dir: &str,
-    profile: Option<String>,
-    apply: bool,
-    dry_run: bool,
-    confidence_threshold: u8,
-) -> Result<i32> {
-    commands::suggest::handle_suggest(
-        format,
-        root,
-        config_dir,
-        state_dir,
-        profile,
-        apply,
-        dry_run,
-        confidence_threshold,
-    )
 }
 
 fn status_value(props: &BTreeMap<String, String>, key: &str) -> String {
@@ -2340,24 +2329,22 @@ fn main() {
             apply,
             dry_run,
             confidence_threshold,
-        } => {
-            match handle_suggest(
-                &format,
-                &root,
-                &config_dir,
-                &state_dir,
-                profile,
-                apply,
-                dry_run,
-                confidence_threshold,
-            ) {
-                Ok(code) => code,
-                Err(err) => {
-                    eprintln!("suggest failed: {err}");
-                    1
-                }
+        } => match commands::suggest::handle_suggest(SuggestRequest {
+            format: format.clone(),
+            root: root.clone(),
+            config_dir: config_dir.clone(),
+            state_dir: state_dir.clone(),
+            profile,
+            apply,
+            dry_run,
+            confidence_threshold,
+        }) {
+            Ok(code) => code,
+            Err(err) => {
+                eprintln!("suggest failed: {err}");
+                1
             }
-        }
+        },
         Commands::Run {
             class,
             profile,

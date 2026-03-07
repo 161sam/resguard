@@ -58,16 +58,16 @@ pub(crate) fn handle_setup(
 
     if suggest {
         println!("setup.suggest_preview=begin");
-        let _ = handle_suggest(
-            format,
-            root,
-            config_dir,
-            state_dir,
-            Some(profile_name.clone()),
-            false,
-            true,
-            70,
-        )?;
+        let _ = commands::suggest::handle_suggest(SuggestRequest {
+            format: format.to_string(),
+            root: root.to_string(),
+            config_dir: config_dir.to_string(),
+            state_dir: state_dir.to_string(),
+            profile: Some(profile_name.clone()),
+            apply: false,
+            dry_run: true,
+            confidence_threshold: 70,
+        })?;
         println!("setup.suggest_preview=end");
     }
 

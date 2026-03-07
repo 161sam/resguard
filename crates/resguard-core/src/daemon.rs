@@ -159,7 +159,7 @@ mod tests {
         let cfg = default_daemon_config();
         let errors = validate_daemon_config(&cfg);
         assert!(errors.is_empty());
-        assert_eq!(cfg.enabled, false);
+        assert!(!cfg.enabled);
     }
 
     #[test]

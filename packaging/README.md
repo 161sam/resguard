@@ -42,6 +42,38 @@ RESGUARD_DEB_WITH_DAEMON=0 ./scripts/build-deb.sh
 
 Service enablement remains explicit (`systemctl enable/start` by operator).
 
+## GitHub Pages APT repository
+
+Generate a Pages-ready APT repository layout under `apt/`:
+
+```bash
+./scripts/generate-apt-repo.sh \
+  --repo-dir ./apt \
+  --input-dir ./release-assets \
+  --distribution stable \
+  --component main \
+  --arch amd64
+```
+
+Generate signed metadata (`Release.gpg`, `InRelease`) and export `pubkey.gpg`:
+
+```bash
+./scripts/generate-apt-repo.sh \
+  --repo-dir ./apt \
+  --input-dir ./release-assets \
+  --distribution stable \
+  --component main \
+  --arch amd64 \
+  --sign-key <GPG_KEY_ID> \
+  --export-pubkey ./apt/pubkey.gpg
+```
+
+The workflow `.github/workflows/apt-pages.yml` deploys `apt/` to GitHub Pages on version tags (`v*`).
+Required repository secrets:
+
+- `RESGUARD_APT_GPG_PRIVATE_KEY` (ASCII armored private key for signing)
+- `RESGUARD_APT_GPG_PASSPHRASE` (optional, only for passphrase-protected keys)
+
 ## Install
 
 ```bash

@@ -1,0 +1,113 @@
+name: APT Repository Pages
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build DEB artifacts
+        run: |
+          set -euo pipefail
+          VERSION="$(awk -F': ' '/^Version:/ {print $2; exit}' packaging/deb/control)"
+          if [[ -z "$VERSION" ]]; then
+            echo "failed to read package version from packaging/deb/control" >&2
+            exit 1
+          fi
+          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+            TAG_VERSION="${GITHUB_REF_NAME#v}"
+            if [[ "$TAG_VERSION" != "$VERSION" ]]; then
+              echo "tag version ($TAG_VERSION) does not match packaging version ($VERSION)" >&2
+              exit 1
+            fi
+          fi
+          mkdir -p release-assets
+
+          RESGUARD_DEB_WITH_DAEMON=0 ./scripts/build-deb.sh
+          mv "resguard_${VERSION}_amd64.deb" "release-assets/resguard_${VERSION}_amd64.deb"
+
+          RESGUARD_DEB_WITH_DAEMON=1 ./scripts/build-deb.sh
+          mv "resguard_${VERSION}_amd64.deb" "release-assets/resguard_${VERSION}_amd64_daemon.deb"
+
+      - name: Import APT signing key
+        env:
+          RESGUARD_APT_GPG_PRIVATE_KEY: ${{ secrets.RESGUARD_APT_GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${RESGUARD_APT_GPG_PRIVATE_KEY}" ]]; then
+            echo "missing secret: RESGUARD_APT_GPG_PRIVATE_KEY" >&2
+            exit 1
+          fi
+
+          GNUPGHOME="$(mktemp -d)"
+          chmod 700 "$GNUPGHOME"
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+
+          printf '%s' "$RESGUARD_APT_GPG_PRIVATE_KEY" | gpg --batch --import
+          KEY_ID="$(gpg --batch --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')"
+          if [[ -z "$KEY_ID" ]]; then
+            echo "failed to resolve secret key id after import" >&2
+            exit 1
+          fi
+          echo "APT_GPG_KEY_ID=$KEY_ID" >> "$GITHUB_ENV"
+
+      - name: Generate signed APT repository
+        env:
+          RESGUARD_APT_GPG_PASSPHRASE: ${{ secrets.RESGUARD_APT_GPG_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          PASS_ARGS=()
+          if [[ -n "${RESGUARD_APT_GPG_PASSPHRASE:-}" ]]; then
+            PASS_ARGS=(--gpg-passphrase-env RESGUARD_APT_GPG_PASSPHRASE)
+          fi
+          ./scripts/generate-apt-repo.sh \
+            --repo-dir ./apt \
+            --input-dir ./release-assets \
+            --distribution stable \
+            --component main \
+            --arch amd64 \
+            --sign-key "$APT_GPG_KEY_ID" \
+            --gpg-homedir "$GNUPGHOME" \
+            "${PASS_ARGS[@]}" \
+            --export-pubkey ./apt/pubkey.gpg
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./apt
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

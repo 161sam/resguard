@@ -6,9 +6,14 @@ on:
       - "v*"
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Version tag to publish (e.g. v0.2.1)"
+      release_tag:
+        description: "Release tag to publish assets to (e.g. v0.2.1)"
         required: true
+        type: string
+      source_ref:
+        description: "Git ref to checkout for build scripts and sources"
+        required: false
+        default: "main"
         type: string
 
 permissions:
@@ -21,7 +26,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.source_ref || github.ref }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -33,8 +38,10 @@ jobs:
         run: |
           set -euo pipefail
           TAG_REF="${GITHUB_REF_NAME:-}"
+          SOURCE_REF="${GITHUB_REF_NAME:-}"
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
-            TAG_REF="${{ github.event.inputs.tag }}"
+            TAG_REF="${{ github.event.inputs.release_tag }}"
+            SOURCE_REF="${{ github.event.inputs.source_ref }}"
           fi
           if [[ ! "$TAG_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "invalid tag ref '$TAG_REF' (expected vX.Y.Z)" >&2
@@ -47,7 +54,7 @@ jobs:
             exit 1
           fi
           if [[ "$PKG_VERSION" != "$VERSION" ]]; then
-            echo "tag version ($VERSION) does not match packaging version ($PKG_VERSION)" >&2
+            echo "version mismatch: release_tag '$TAG_REF' expects '$VERSION' but source_ref '$SOURCE_REF' contains packaging version '$PKG_VERSION'" >&2
             exit 1
           fi
           echo "TAG_REF=$TAG_REF" >> "$GITHUB_ENV"

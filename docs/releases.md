@@ -70,7 +70,22 @@ If `RESGUARD_APT_GPG_PRIVATE_KEY` is missing:
 
 - release assets are still published by `release-upload.yml`
 - APT workflow is skipped with an explicit summary message
-- after adding the secret, rerun `APT Repository Pages` via `workflow_dispatch` for the same tag
+- after adding the secret, rerun `APT Repository Pages` via `workflow_dispatch` with `release_tag=<tag>` and `source_ref=<ref>`
+
+## Backfill an existing tag
+
+Use this when a release tag already exists (for example `v0.2.1`) but release/APT assets were not published yet.
+
+For each workflow (`Release Upload` and `APT Repository Pages`), run `workflow_dispatch` with:
+
+- `release_tag`: existing tag to publish to (for example `v0.2.1`)
+- `source_ref`: branch/commit containing the publishing automation (default `main`)
+
+Notes:
+
+- `source_ref` controls which scripts are checked out and executed.
+- `release_tag` controls the target GitHub Release tag and expected version.
+- workflows fail if `packaging/deb/control` version from `source_ref` does not match `release_tag` (for example source version `0.2.2` with `release_tag=v0.2.1`).
 
 ## Verification checklist
 

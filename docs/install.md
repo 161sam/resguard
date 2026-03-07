@@ -10,17 +10,22 @@ Resguard bietet zwei offizielle Installationswege:
 Manueller Weg, wenn du eine konkrete Version direkt installieren willst.
 
 ```bash
-VERSION="0.2.1"
-curl -fsSLO "https://github.com/<owner>/<repo>/releases/download/v${VERSION}/resguard_${VERSION}_amd64.deb"
-sudo apt install -y "./resguard_${VERSION}_amd64.deb"
+curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.2.1/resguard_0.2.1_amd64.deb"
+sudo apt install -y ./resguard_0.2.1_amd64.deb
 ```
 
 Optional: SHA256 prüfen
 
 ```bash
-VERSION="0.2.1"
-curl -fsSLO "https://github.com/<owner>/<repo>/releases/download/v${VERSION}/SHA256SUMS"
+curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.2.1/SHA256SUMS"
 sha256sum -c SHA256SUMS --ignore-missing
+```
+
+Optional: Daemon-Variante installieren (zusätzliche `resguardd`-Assets, nicht auto-enabled):
+
+```bash
+curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.2.1/resguard_0.2.1_amd64_daemon.deb"
+sudo apt install -y ./resguard_0.2.1_amd64_daemon.deb
 ```
 
 Upgrade auf neue Versionen erfolgt erneut per Download + Installation.
@@ -30,11 +35,11 @@ Upgrade auf neue Versionen erfolgt erneut per Download + Installation.
 Empfohlen für Systeme, die Resguard kontinuierlich über `apt` aktualisieren sollen.
 
 ```bash
-curl -fsSL "https://<owner>.github.io/<repo>/pubkey.gpg" \
+curl -fsSL "https://161sam.github.io/resguard/pubkey.gpg" \
   | gpg --dearmor \
   | sudo tee /usr/share/keyrings/resguard-archive-keyring.gpg >/dev/null
 
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/resguard-archive-keyring.gpg] https://<owner>.github.io/<repo> stable main" \
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/resguard-archive-keyring.gpg] https://161sam.github.io/resguard stable main" \
   | sudo tee /etc/apt/sources.list.d/resguard.list >/dev/null
 
 sudo apt update

@@ -27,42 +27,72 @@ cargo build
 
 ### Download .deb from GitHub Release
 
-Manueller Installationsweg pro Version:
+Manueller Installationsweg pro Version (aktuell `v0.2.1`):
 
 ```bash
-VERSION="0.2.1"
-curl -fsSLO "https://github.com/<owner>/<repo>/releases/download/v${VERSION}/resguard_${VERSION}_amd64.deb"
-sudo apt install -y "./resguard_${VERSION}_amd64.deb"
+curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.2.1/resguard_0.2.1_amd64.deb"
+sudo apt install -y ./resguard_0.2.1_amd64.deb
 ```
 
 Optional: Checksum verifizieren
 
 ```bash
-VERSION="0.2.1"
-curl -fsSLO "https://github.com/<owner>/<repo>/releases/download/v${VERSION}/SHA256SUMS"
+curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.2.1/SHA256SUMS"
 sha256sum -c SHA256SUMS --ignore-missing
+```
+
+Optional: Daemon-Variante installieren (enthält zusätzlich `resguardd` + systemd-Service-Template).
+Der Daemon bleibt nach Installation deaktiviert, bis er explizit aktiviert wird.
+
+```bash
+curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.2.1/resguard_0.2.1_amd64_daemon.deb"
+sudo apt install -y ./resguard_0.2.1_amd64_daemon.deb
 ```
 
 ### Install via APT repository
 
-APT-Repository auf GitHub Pages einrichten (inkl. automatischer Updates via `apt upgrade`):
+Einmaliges Setup gegen das GitHub-Pages-APT-Repo (`stable main`):
+Das Repo wird aus `apt/` per Workflow `.github/workflows/apt-pages.yml` veröffentlicht.
 
 ```bash
-curl -fsSL "https://<owner>.github.io/<repo>/pubkey.gpg" \
+curl -fsSL "https://161sam.github.io/resguard/pubkey.gpg" \
   | gpg --dearmor \
   | sudo tee /usr/share/keyrings/resguard-archive-keyring.gpg >/dev/null
 
-echo "deb [arch=amd64 signed-by=/usr/share/keyrings/resguard-archive-keyring.gpg] https://<owner>.github.io/<repo> stable main" \
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/resguard-archive-keyring.gpg] https://161sam.github.io/resguard stable main" \
   | sudo tee /etc/apt/sources.list.d/resguard.list >/dev/null
 
 sudo apt update
 sudo apt install -y resguard
 ```
 
+Upgrades danach:
+
+```bash
+sudo apt update
+sudo apt upgrade -y
+```
+
 Unterschiede:
 
 - GitHub Release Asset: manueller Download und manuelles Upgrade pro Version.
-- APT Repository: einmal einrichten, danach automatische Update-Pipeline via `apt`.
+- APT Repository: einmal einrichten, danach Upgrades über den normalen `apt`-Prozess.
+
+## Post-install Quickstart
+
+```bash
+resguard doctor
+sudo resguard setup
+resguard suggest
+```
+
+Optional Desktop-Wrap (Beispiel):
+
+```bash
+resguard desktop list --filter firefox
+resguard desktop wrap org.mozilla.firefox.desktop --class browsers
+sudo resguard apply auto --user-daemon-reload
+```
 
 ## Quickstart ohne sudo (`--root` Demo)
 
@@ -155,8 +185,4 @@ Non-interactive Fallback:
 
 ## Release / Tagging
 
-Release-Ablauf:
-
-```bash
-see docs/releases.md
-```
+Release-Ablauf und Tagging: [docs/releases.md](docs/releases.md)

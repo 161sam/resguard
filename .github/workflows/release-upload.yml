@@ -1,0 +1,53 @@
+name: Release Upload
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release assets
+        run: |
+          set -euo pipefail
+          VERSION="${VERSION#v}"
+          mkdir -p release-assets
+
+          RESGUARD_DEB_WITH_DAEMON=0 ./scripts/build-deb.sh
+          mv "resguard_${VERSION}_amd64.deb" "release-assets/resguard_${VERSION}_amd64.deb"
+
+          RESGUARD_DEB_WITH_DAEMON=1 ./scripts/build-deb.sh
+          mv "resguard_${VERSION}_amd64.deb" "release-assets/resguard_${VERSION}_amd64_daemon.deb"
+
+          (
+            cd release-assets
+            sha256sum \
+              "resguard_${VERSION}_amd64.deb" \
+              "resguard_${VERSION}_amd64_daemon.deb" > SHA256SUMS
+          )
+
+      - name: Upload assets to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          files: |
+            release-assets/*.deb
+            release-assets/SHA256SUMS
+          overwrite_files: true

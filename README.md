@@ -23,6 +23,47 @@ Teilweise implementiert / Stub:
 cargo build
 ```
 
+## Installation
+
+### Download .deb from GitHub Release
+
+Manueller Installationsweg pro Version:
+
+```bash
+VERSION="0.2.1"
+curl -fsSLO "https://github.com/<owner>/<repo>/releases/download/v${VERSION}/resguard_${VERSION}_amd64.deb"
+sudo apt install -y "./resguard_${VERSION}_amd64.deb"
+```
+
+Optional: Checksum verifizieren
+
+```bash
+VERSION="0.2.1"
+curl -fsSLO "https://github.com/<owner>/<repo>/releases/download/v${VERSION}/SHA256SUMS"
+sha256sum -c SHA256SUMS --ignore-missing
+```
+
+### Install via APT repository
+
+APT-Repository auf GitHub Pages einrichten (inkl. automatischer Updates via `apt upgrade`):
+
+```bash
+curl -fsSL "https://<owner>.github.io/<repo>/pubkey.gpg" \
+  | gpg --dearmor \
+  | sudo tee /usr/share/keyrings/resguard-archive-keyring.gpg >/dev/null
+
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/resguard-archive-keyring.gpg] https://<owner>.github.io/<repo> stable main" \
+  | sudo tee /etc/apt/sources.list.d/resguard.list >/dev/null
+
+sudo apt update
+sudo apt install -y resguard
+```
+
+Unterschiede:
+
+- GitHub Release Asset: manueller Download und manuelles Upgrade pro Version.
+- APT Repository: einmal einrichten, danach automatische Update-Pipeline via `apt`.
+
 ## Quickstart ohne sudo (`--root` Demo)
 
 Die folgenden Schritte schreiben nur unter `/tmp/rgdemo`.
@@ -106,6 +147,7 @@ Non-interactive Fallback:
 
 - [CLI](docs/cli.md)
 - [Design](docs/design.md)
+- [Install](docs/install.md)
 - [Safety](docs/safety.md)
 - [Threat Model](docs/threat-model.md)
 - [Profiles](docs/profiles.md)

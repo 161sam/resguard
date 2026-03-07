@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to publish to APT Pages (e.g. v0.2.1)"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -18,9 +23,13 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      signing_ready: ${{ steps.signing_guard.outputs.signing_ready }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -28,21 +37,53 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Build DEB artifacts
+      - name: Resolve and validate version
         run: |
           set -euo pipefail
-          VERSION="$(awk -F': ' '/^Version:/ {print $2; exit}' packaging/deb/control)"
-          if [[ -z "$VERSION" ]]; then
+          TAG_REF="${GITHUB_REF_NAME:-}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            TAG_REF="${{ github.event.inputs.tag }}"
+          fi
+          if [[ ! "$TAG_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "invalid tag ref '$TAG_REF' (expected vX.Y.Z)" >&2
+            exit 1
+          fi
+          VERSION="${TAG_REF#v}"
+          PKG_VERSION="$(awk -F': ' '/^Version:/ {print $2; exit}' packaging/deb/control)"
+          if [[ -z "$PKG_VERSION" ]]; then
             echo "failed to read package version from packaging/deb/control" >&2
             exit 1
           fi
-          if [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
-            TAG_VERSION="${GITHUB_REF_NAME#v}"
-            if [[ "$TAG_VERSION" != "$VERSION" ]]; then
-              echo "tag version ($TAG_VERSION) does not match packaging version ($VERSION)" >&2
-              exit 1
-            fi
+          if [[ "$PKG_VERSION" != "$VERSION" ]]; then
+            echo "tag version ($VERSION) does not match packaging version ($PKG_VERSION)" >&2
+            exit 1
           fi
+          echo "TAG_REF=$TAG_REF" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Check signing secret availability
+        id: signing_guard
+        env:
+          RESGUARD_APT_GPG_PRIVATE_KEY: ${{ secrets.RESGUARD_APT_GPG_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${RESGUARD_APT_GPG_PRIVATE_KEY}" ]]; then
+            echo "signing_ready=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "signing_ready=false" >> "$GITHUB_OUTPUT"
+          {
+            echo "### APT publish skipped"
+            echo
+            echo "Missing secret: \`RESGUARD_APT_GPG_PRIVATE_KEY\`."
+            echo "Release assets are still published by \`release-upload.yml\`."
+            echo "After adding the secret, rerun this workflow with \`workflow_dispatch\` and the same tag."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build DEB artifacts
+        if: steps.signing_guard.outputs.signing_ready == 'true'
+        run: |
+          set -euo pipefail
           mkdir -p release-assets
 
           RESGUARD_DEB_WITH_DAEMON=0 ./scripts/build-deb.sh
@@ -52,6 +93,7 @@ jobs:
           mv "resguard_${VERSION}_amd64.deb" "release-assets/resguard_${VERSION}_amd64_daemon.deb"
 
       - name: Import APT signing key
+        if: steps.signing_guard.outputs.signing_ready == 'true'
         env:
           RESGUARD_APT_GPG_PRIVATE_KEY: ${{ secrets.RESGUARD_APT_GPG_PRIVATE_KEY }}
         run: |
@@ -74,6 +116,7 @@ jobs:
           echo "APT_GPG_KEY_ID=$KEY_ID" >> "$GITHUB_ENV"
 
       - name: Generate signed APT repository
+        if: steps.signing_guard.outputs.signing_ready == 'true'
         env:
           RESGUARD_APT_GPG_PASSPHRASE: ${{ secrets.RESGUARD_APT_GPG_PASSPHRASE }}
         run: |
@@ -94,15 +137,18 @@ jobs:
             --export-pubkey ./apt/pubkey.gpg
 
       - name: Configure Pages
+        if: steps.signing_guard.outputs.signing_ready == 'true'
         uses: actions/configure-pages@v5
 
       - name: Upload Pages artifact
+        if: steps.signing_guard.outputs.signing_ready == 'true'
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./apt
 
   deploy:
     needs: build
+    if: needs.build.outputs.signing_ready == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

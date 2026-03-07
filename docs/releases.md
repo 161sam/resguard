@@ -1,82 +1,79 @@
 # Releases
 
-This document describes the release cut flow for Resguard.
+This document defines the release path for Resguard.
 
-## Scope and Version Gates
+## One-time publishing setup
 
-- `v0.3.0`: suggestion/classification release line
-- `v0.4.0`: TUI + daemon release line
-- `resguardd` remains optional in packaging
-- `tui` remains feature-gated
-
-## Scripted Release Flow
-
-Primary workflow:
+Set up APT signing + GitHub Pages once:
 
 ```bash
-./scripts/release.sh --version <x.y.z> --dry-run
-./scripts/release.sh --version <x.y.z> [--with-daemon]
+./scripts/bootstrap-publishing.sh --repo 161sam/resguard
 ```
 
-What the script does:
+What this does (when `gh` auth is valid):
 
-1. checks clean git tree (non-dry-run)
-2. bumps versions in all crate `Cargo.toml` files
-3. updates `packaging/deb/control` version
-4. builds Debian artifact via `scripts/build-deb.sh`
-5. prints tag/push commands
+1. generates a dedicated APT signing keypair
+2. uploads `RESGUARD_APT_GPG_PRIVATE_KEY` to GitHub Actions secrets
+3. configures GitHub Pages for workflow deployment (best-effort)
 
-## v0.3.0 Cut Plan (suggest-focused)
-
-1. Update changelog sections for `v0.3.0`.
-2. Run release script in dry-run mode:
+If `gh` auth is unavailable, the script still generates key material and prints the exact remaining `gh` commands.
+If local key generation is blocked (for example restricted `gpg-agent`), provide existing key material:
 
 ```bash
-./scripts/release.sh --version 0.3.0 --dry-run
+./scripts/bootstrap-publishing.sh \
+  --repo 161sam/resguard \
+  --private-key-file /path/to/RESGUARD_APT_GPG_PRIVATE_KEY.asc \
+  --public-key-file /path/to/RESGUARD_APT_GPG_PUBLIC_KEY.asc
 ```
 
-3. Execute release:
+## Tag-and-go release flow
+
+For each release:
+
+1. bump versions and stage local artifacts:
 
 ```bash
-./scripts/release.sh --version 0.3.0
+./scripts/release.sh --version <x.y.z>
 ```
 
-4. Run validation:
+2. commit version bump:
 
 ```bash
-cargo build
-cargo test -- --test-threads=1
+git add crates/*/Cargo.toml packaging/deb/control
+git commit -m "chore(release): cut v<x.y.z>"
 ```
 
-5. Tag and push using commands printed by the script.
-
-## v0.4.0 Cut Plan (tui + daemon)
-
-1. Update changelog sections for `v0.4.0` (include TUI + daemon notes).
-2. Run release script in dry-run mode:
+3. tag + push:
 
 ```bash
-./scripts/release.sh --version 0.4.0 --dry-run --with-daemon
+git tag -a v<x.y.z> -m "resguard v<x.y.z>"
+git push origin v<x.y.z>
 ```
 
-3. Execute release with daemon artifact:
+On tag push (`v*`), GitHub Actions runs:
 
-```bash
-./scripts/release.sh --version 0.4.0 --with-daemon
-```
+- `.github/workflows/release-upload.yml`
+  - builds:
+    - `resguard_<version>_amd64.deb`
+    - `resguard_<version>_amd64_daemon.deb`
+    - `SHA256SUMS`
+  - uploads/overwrites assets on GitHub Release
+- `.github/workflows/apt-pages.yml`
+  - builds both `.deb` artifacts
+  - generates signed APT metadata (`Release`, `InRelease`, `Release.gpg`, `Packages`, `Packages.gz`)
+  - exports `pubkey.gpg`
+  - deploys `apt/` to GitHub Pages
 
-4. Run validation:
+## Signing secret fallback behavior
 
-```bash
-cargo build --features tui
-cargo build -p resguard-daemon
-cargo test -- --test-threads=1
-```
+If `RESGUARD_APT_GPG_PRIVATE_KEY` is missing:
 
-5. Tag and push using commands printed by the script.
+- release assets are still published by `release-upload.yml`
+- APT workflow is skipped with an explicit summary message
+- after adding the secret, rerun `APT Repository Pages` via `workflow_dispatch` for the same tag
 
-## Verification Checklist
+## Verification checklist
 
-- `scripts/release.sh --dry-run` prints expected actions.
-- `scripts/build-deb.sh` produces `resguard_<version>_amd64.deb`.
-- `packaging/deb/control` version matches crate versions.
+- `scripts/release.sh --dry-run` succeeds.
+- `scripts/build-deb.sh` validates version consistency across crates and packaging.
+- `release-upload.yml` and `apt-pages.yml` both enforce tag/version consistency.

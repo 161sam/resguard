@@ -74,6 +74,14 @@ Required repository secrets:
 - `RESGUARD_APT_GPG_PRIVATE_KEY` (ASCII armored private key for signing)
 - `RESGUARD_APT_GPG_PASSPHRASE` (optional, only for passphrase-protected keys)
 
+Bootstrap one-time signing/pages setup:
+
+```bash
+./scripts/bootstrap-publishing.sh --repo 161sam/resguard
+```
+
+If GitHub auth is unavailable, the script prints the exact remaining `gh secret set` / Pages commands.
+
 ## Install
 
 ```bash

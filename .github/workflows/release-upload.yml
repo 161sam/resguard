@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag to publish (e.g. v0.2.1)"
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -11,11 +17,11 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
-    env:
-      VERSION: ${{ github.ref_name }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref }}
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -23,10 +29,33 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      - name: Resolve and validate version
+        run: |
+          set -euo pipefail
+          TAG_REF="${GITHUB_REF_NAME:-}"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            TAG_REF="${{ github.event.inputs.tag }}"
+          fi
+          if [[ ! "$TAG_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "invalid tag ref '$TAG_REF' (expected vX.Y.Z)" >&2
+            exit 1
+          fi
+          VERSION="${TAG_REF#v}"
+          PKG_VERSION="$(awk -F': ' '/^Version:/ {print $2; exit}' packaging/deb/control)"
+          if [[ -z "$PKG_VERSION" ]]; then
+            echo "failed to read package version from packaging/deb/control" >&2
+            exit 1
+          fi
+          if [[ "$PKG_VERSION" != "$VERSION" ]]; then
+            echo "tag version ($VERSION) does not match packaging version ($PKG_VERSION)" >&2
+            exit 1
+          fi
+          echo "TAG_REF=$TAG_REF" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
       - name: Build release assets
         run: |
           set -euo pipefail
-          VERSION="${VERSION#v}"
           mkdir -p release-assets
 
           RESGUARD_DEB_WITH_DAEMON=0 ./scripts/build-deb.sh
@@ -41,13 +70,17 @@ jobs:
               "resguard_${VERSION}_amd64.deb" \
               "resguard_${VERSION}_amd64_daemon.deb" > SHA256SUMS
           )
+          test -s "release-assets/resguard_${VERSION}_amd64.deb"
+          test -s "release-assets/resguard_${VERSION}_amd64_daemon.deb"
+          test -s "release-assets/SHA256SUMS"
 
       - name: Upload assets to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref_name }}
-          name: ${{ github.ref_name }}
+          tag_name: ${{ env.TAG_REF }}
+          name: ${{ env.TAG_REF }}
           files: |
             release-assets/*.deb
             release-assets/SHA256SUMS
           overwrite_files: true
+          fail_on_unmatched_files: true

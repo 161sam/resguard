@@ -78,6 +78,12 @@ Unterschiede:
 - GitHub Release Asset: manueller Download und manuelles Upgrade pro Version.
 - APT Repository: einmal einrichten, danach Upgrades über den normalen `apt`-Prozess.
 
+Hinweis zur Veröffentlichung:
+
+- Die APT-Metadaten werden signiert veröffentlicht.
+- Falls das Signing-Secret noch nicht eingerichtet ist, wird nur der GitHub-Release-Upload ausgeführt.
+- Details: [docs/releases.md](docs/releases.md)
+
 ## Post-install Quickstart
 
 ```bash
@@ -186,3 +192,11 @@ Non-interactive Fallback:
 ## Release / Tagging
 
 Release-Ablauf und Tagging: [docs/releases.md](docs/releases.md)
+
+Kurzfassung für Maintainer:
+
+```bash
+./scripts/release.sh --version <x.y.z>
+git tag -a v<x.y.z> -m "resguard v<x.y.z>"
+git push origin v<x.y.z>
+```

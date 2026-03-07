@@ -46,6 +46,8 @@ sudo apt update
 sudo apt install -y resguard
 ```
 
+Das Repository wird signiert über GitHub Pages ausgeliefert (`Release.gpg` + `InRelease`).
+
 Updates:
 
 ```bash
@@ -61,3 +63,7 @@ sudo apt upgrade -y
 - APT Repository:
   - einmaliges Setup
   - danach automatisierte Paket-Updates über den normalen APT-Prozess
+
+Wenn ein neues Tag bereits als GitHub Release verfügbar ist, aber noch nicht im APT Repo erscheint,
+ist typischerweise das Signing-Secret im Publishing-Workflow noch nicht gesetzt.
+In diesem Fall vorübergehend den Release-Asset-Weg nutzen und Maintainer-Doku in `docs/releases.md` prüfen.

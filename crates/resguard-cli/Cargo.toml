@@ -31,3 +31,4 @@ resguard-state = { path = "../resguard-state" }
 resguard-model = { path = "../resguard-model" }
 resguard-discovery = { path = "../resguard-discovery" }
 resguard-policy = { path = "../resguard-policy" }
+resguard-services = { path = "../resguard-services" }

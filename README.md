@@ -21,6 +21,8 @@ Teilweise implementiert / Stub:
 
 ```bash
 cargo build
+./target/debug/resguard --version
+./target/debug/resguard version
 ```
 
 ## Installation

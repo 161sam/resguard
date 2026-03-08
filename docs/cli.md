@@ -7,6 +7,7 @@ Binary: `resguard`
 Die folgenden Flags sind global und funktionieren vor oder nach dem Subcommand:
 
 - `--format <table|json|yaml>` (default: `table`)
+- `--version`
 - `--json-log` (optionale strukturierte Logs auf stderr)
 - `--verbose`
 - `--quiet`
@@ -44,6 +45,22 @@ Wichtig:
 ---
 
 ## Commands
+
+## `resguard version`
+Syntax:
+
+- `resguard version`
+
+Verhalten:
+
+- gibt dieselbe Versionsausgabe aus wie `resguard --version`
+- Version stammt aus der Cargo-Paketversion des CLI-Binaries
+
+Exit:
+
+- `0` OK
+
+---
 
 ## `resguard init`
 Syntax:

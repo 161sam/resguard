@@ -54,6 +54,13 @@ Run best-effort diagnostic checks for common setup/runtime issues.
 Show pressure and memory/slice usage metrics from /proc and systemctl.
 
 .TP
+.B version
+Print CLI version information.
+Matches
+.B resguard --version
+output.
+
+.TP
 .B run --class <class> -- <cmd...>
 Start a command in a class slice via systemd-run.
 Supports --wait and optional --no-check override.
@@ -152,6 +159,8 @@ resguard desktop wrap firefox.desktop --class browsers
 resguard desktop doctor
 resguard doctor
 resguard metrics
+resguard --version
+resguard version
 .fi
 
 .SH FILES

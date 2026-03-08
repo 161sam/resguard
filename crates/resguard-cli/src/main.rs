@@ -60,7 +60,11 @@ use ratatui::widgets::{Block, Borders, Cell, Gauge, Paragraph, Row, Table};
 use ratatui::Terminal;
 
 #[derive(Parser, Debug)]
-#[command(name = "resguard", about = "Linux resource guard using systemd slices")]
+#[command(
+    name = "resguard",
+    about = "Linux resource guard using systemd slices",
+    version = env!("CARGO_PKG_VERSION")
+)]
 struct Cli {
     #[arg(long, global = true, default_value = "table")]
     format: String,
@@ -194,6 +198,7 @@ enum Commands {
         #[arg(value_enum)]
         shell: CompletionShell,
     },
+    Version,
 }
 
 #[derive(Subcommand, Debug)]
@@ -380,6 +385,11 @@ fn handle_completion(shell: CompletionShell) -> Result<i32> {
     };
     generate(target, &mut cmd, bin_name, &mut out);
     Ok(0)
+}
+
+fn cli_version_output() -> String {
+    let cmd = Cli::command();
+    cmd.render_version().to_string()
 }
 
 fn format_bytes_binary(bytes: u64) -> String {
@@ -2174,10 +2184,11 @@ fn main() {
     let cli = Cli::parse();
     let json_log = json_log_enabled(&cli);
     let is_completion = matches!(&cli.command, Commands::Completion { .. });
-    if !is_completion {
+    let is_version = matches!(&cli.command, Commands::Version);
+    if !is_completion && !is_version {
         emit_log(json_log, "INFO", "cli.start", "starting command");
     }
-    if !is_completion {
+    if !is_completion && !is_version {
         print_global_context(&cli);
     }
     let format = cli.format.clone();
@@ -2555,9 +2566,13 @@ fn main() {
                 1
             }
         },
+        Commands::Version => {
+            print!("{}", cli_version_output());
+            0
+        }
     };
 
-    if !is_completion {
+    if !is_completion && !is_version {
         emit_log(
             json_log,
             "INFO",

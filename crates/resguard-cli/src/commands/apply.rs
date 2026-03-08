@@ -106,7 +106,7 @@ pub(crate) fn handle_apply(
             let failure_manifest = manifest_from_transaction(&tx, Some(profile_name.to_string()));
             let rollback_result =
                 rollback_from_manifest(Path::new(root), &rooted_state_dir, &failure_manifest)
-                    .and_then(|_| maybe_daemon_reload_for_root(root));
+                    .and_then(|_| daemon_reload_if_root(root));
             if rollback_result.is_ok() {
                 println!("rollback=attempted");
                 return Ok(4);

@@ -3,7 +3,7 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, Shell};
 use regex::Regex;
 use resguard_config::{load_profile_from_store, profile_path, save_profile, validate_profile_file};
-use resguard_core::{build_apply_plan, validate_profile, Action, PlanOptions};
+use resguard_core::validate_profile;
 use resguard_discovery::{
     build_desktop_exec_index as discovery_build_desktop_exec_index,
     discover_desktop_entries as discovery_discover_desktop_entries,
@@ -21,18 +21,19 @@ use resguard_policy::{
     validate_confidence_threshold as policy_validate_confidence_threshold, AutoProfileSnapshot,
     ClassMatch as PolicyClassMatch, ClassificationInput, ConfidenceSignals,
 };
+use resguard_runtime::{
+    build_apply_plan, check_command_success, cpu_count, daemon_reload_if_root, execute_action,
+    is_root_user, planned_write_changes, read_mem_total_bytes, read_meminfo_kb, read_pressure_1min,
+    resolve_user_runtime_dir, systemctl_cat_unit, systemctl_is_active, systemctl_list_units,
+    systemctl_service_action, systemctl_set_slice_memory_limits, systemctl_show_props, systemd_run,
+    write_file, Action, PlanOptions,
+};
+#[cfg(feature = "tui")]
+use resguard_runtime::{parse_prop_u64, read_mem_available_bytes, read_pressure};
 use resguard_state::{
     begin_transaction, manifest_from_transaction, read_backup_manifest, read_state,
     rollback_from_manifest, snapshot_before_write, state_from_manifest, write_backup_manifest,
     write_state,
-};
-use resguard_system::{
-    cpu_count, ensure_dir, exec_command, is_root_user, read_mem_total_bytes, read_pressure_1min,
-    systemctl_cat_unit, systemctl_is_active, systemctl_show_props, systemd_run, write_file,
-};
-#[cfg(feature = "tui")]
-use resguard_system::{
-    parse_prop_u64, read_mem_available_bytes, read_pressure, systemctl_list_units,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -42,7 +43,7 @@ use std::io;
 #[cfg(feature = "tui")]
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
-use std::process::{self, Command};
+use std::process;
 use std::time::Duration;
 #[cfg(feature = "tui")]
 use std::time::Instant;
@@ -51,8 +52,7 @@ use std::{collections::HashMap, fs};
 mod commands;
 mod util;
 pub(crate) use util::system::{
-    check_command_success, format_bytes_human, list_system_slices, parse_u64_prop,
-    partial_exit_code, read_meminfo_kb,
+    format_bytes_human, list_system_slices, parse_u64_prop, partial_exit_code,
 };
 
 #[cfg(feature = "tui")]
@@ -437,59 +437,6 @@ fn resolve_with_root(root: &str, path: PathBuf) -> Result<PathBuf> {
     }
 }
 
-fn execute_action(action: &Action) -> Result<()> {
-    match action {
-        Action::EnsureDir { path } => {
-            ensure_dir(path)?;
-            Ok(())
-        }
-        Action::WriteFile { path, content } => {
-            write_file(path, content)?;
-            Ok(())
-        }
-        Action::Exec {
-            program,
-            args,
-            env,
-            best_effort,
-        } => match exec_command(program, args, env) {
-            Ok(status) => {
-                if status.success() {
-                    Ok(())
-                } else if *best_effort {
-                    eprintln!(
-                        "warn: best-effort command failed: {} {} (status={})",
-                        program,
-                        args.join(" "),
-                        status
-                    );
-                    Ok(())
-                } else {
-                    Err(anyhow!(
-                        "external command failed: {} {} (status={})",
-                        program,
-                        args.join(" "),
-                        status
-                    ))
-                }
-            }
-            Err(err) => {
-                if *best_effort {
-                    eprintln!(
-                        "warn: best-effort command failed to execute: {} {} ({})",
-                        program,
-                        args.join(" "),
-                        err
-                    );
-                    Ok(())
-                } else {
-                    Err(err)
-                }
-            }
-        },
-    }
-}
-
 fn print_plan(actions: &[Action]) {
     println!("plan:");
     for action in actions {
@@ -512,80 +459,6 @@ fn print_plan(actions: &[Action]) {
             }
         }
     }
-}
-
-fn write_needs_change(path: &Path, desired: &str) -> Result<bool> {
-    match std::fs::read_to_string(path) {
-        Ok(current) => Ok(current != desired),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(true),
-        Err(err)
-            if err.kind() == std::io::ErrorKind::IsADirectory
-                || err.kind() == std::io::ErrorKind::InvalidData =>
-        {
-            Ok(true)
-        }
-        Err(err) => Err(anyhow!("failed to read {}: {}", path.display(), err)),
-    }
-}
-
-fn planned_write_changes(actions: &[Action]) -> Result<Vec<(PathBuf, String)>> {
-    let mut out = Vec::new();
-    for action in actions {
-        if let Action::WriteFile { path, content } = action {
-            if write_needs_change(path, content)? {
-                out.push((path.clone(), content.clone()));
-            }
-        }
-    }
-    Ok(out)
-}
-
-fn maybe_daemon_reload_for_root(root: &str) -> Result<()> {
-    if root == "/" {
-        let status = exec_command(
-            "systemctl",
-            &["daemon-reload".to_string()],
-            &std::collections::BTreeMap::new(),
-        )?;
-        if !status.success() {
-            return Err(anyhow!(
-                "systemctl daemon-reload failed with status {status}"
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn resolve_user_runtime_dir(user: &str) -> Option<String> {
-    let loginctl_output = Command::new("loginctl")
-        .arg("show-user")
-        .arg(user)
-        .arg("-p")
-        .arg("RuntimePath")
-        .arg("--value")
-        .output()
-        .ok();
-
-    if let Some(out) = loginctl_output {
-        if out.status.success() {
-            let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !v.is_empty() {
-                return Some(v);
-            }
-        }
-    }
-
-    let id_output = Command::new("id").arg("-u").arg(user).output().ok()?;
-    if !id_output.status.success() {
-        return None;
-    }
-    let uid = String::from_utf8_lossy(&id_output.stdout)
-        .trim()
-        .to_string();
-    if uid.is_empty() {
-        return None;
-    }
-    Some(format!("/run/user/{uid}"))
 }
 
 fn handle_apply(
@@ -726,7 +599,7 @@ fn handle_rollback(root: &str, state_dir: &str, last: bool, to: Option<String>) 
 
     let manifest = read_backup_manifest(&rooted_state_dir, &backup_id)?;
     rollback_from_manifest(Path::new(root), &rooted_state_dir, &manifest)?;
-    maybe_daemon_reload_for_root(root)?;
+    daemon_reload_if_root(root)?;
 
     write_state(&rooted_state_dir, &resguard_state::State::default())?;
     println!("result=ok");
@@ -896,32 +769,10 @@ fn handle_rescue(
 }
 
 fn systemctl_user_scope_units() -> Result<Vec<String>> {
-    let out = Command::new("systemctl")
-        .args([
-            "--user",
-            "list-units",
-            "--type=scope",
-            "--all",
-            "--no-legend",
-            "--no-pager",
-        ])
-        .output()?;
-    if !out.status.success() {
-        return Err(anyhow!(
-            "systemctl --user list-units failed with status {}",
-            out.status
-        ));
-    }
-
-    let mut scopes = Vec::new();
-    let text = String::from_utf8_lossy(&out.stdout);
-    for line in text.lines() {
-        let unit = line.split_whitespace().next().unwrap_or_default();
-        if unit.ends_with(".scope") {
-            scopes.push(unit.to_string());
-        }
-    }
-    Ok(scopes)
+    Ok(systemctl_list_units(true, "scope")?
+        .into_iter()
+        .filter(|unit| unit.ends_with(".scope"))
+        .collect())
 }
 
 fn systemctl_user_show_scope(scope: &str) -> Result<BTreeMap<String, String>> {
@@ -1831,20 +1682,11 @@ fn handle_panic(root: &str, duration: Option<String>) -> Result<i32> {
     let target_high = (base as f64 * 0.5) as u64;
     let target_max = (base as f64 * 0.6) as u64;
 
-    let env = BTreeMap::new();
-    let set_args = vec![
-        "set-property".to_string(),
-        "user.slice".to_string(),
-        format!("MemoryHigh={}", target_high),
-        format!("MemoryMax={}", target_max),
-    ];
-    let status = exec_command("systemctl", &set_args, &env)?;
-    if !status.success() {
-        return Err(anyhow!(
-            "systemctl set-property failed with status {}",
-            status
-        ));
-    }
+    systemctl_set_slice_memory_limits(
+        "user.slice",
+        &target_high.to_string(),
+        &target_max.to_string(),
+    )?;
 
     println!(
         "panic_applied user.slice MemoryHigh={} MemoryMax={}",
@@ -1857,16 +1699,7 @@ fn handle_panic(root: &str, duration: Option<String>) -> Result<i32> {
         println!("panic_duration={}s", wait.as_secs());
         std::thread::sleep(wait);
 
-        let revert_args = vec![
-            "set-property".to_string(),
-            "user.slice".to_string(),
-            format!("MemoryHigh={}", before_high),
-            format!("MemoryMax={}", before_max),
-        ];
-        let revert_status = exec_command("systemctl", &revert_args, &env)?;
-        if !revert_status.success() {
-            return Err(anyhow!("panic revert failed with status {}", revert_status));
-        }
+        systemctl_set_slice_memory_limits("user.slice", &before_high, &before_max)?;
         println!("panic_reverted");
     } else {
         println!("hint=to revert manually run: sudo systemctl revert user.slice");

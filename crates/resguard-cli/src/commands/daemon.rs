@@ -1,18 +1,11 @@
 use crate::*;
 
 fn run_systemctl_service_action(action: &str, service: &str) -> Result<i32> {
-    let status = Command::new("systemctl")
-        .arg(action)
-        .arg(service)
-        .status()?;
-    if status.success() {
+    if systemctl_service_action(action, service)? {
         println!("result=ok action={} service={}", action, service);
         Ok(0)
     } else {
-        eprintln!(
-            "systemctl {} {} failed with status {}",
-            action, service, status
-        );
+        eprintln!("systemctl {} {} failed", action, service);
         Ok(1)
     }
 }

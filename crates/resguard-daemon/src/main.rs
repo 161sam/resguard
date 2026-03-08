@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use clap::Parser;
-use resguard_system::{parse_prop_u64, read_mem_total_bytes, read_pressure, systemctl_show_props};
+use resguard_runtime::{parse_prop_u64, read_mem_total_bytes, read_pressure, systemctl_show_props};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;

@@ -1,3 +1,4 @@
+use crate::cli::{ApplyOptions, SuggestRequest};
 use crate::*;
 
 pub(crate) fn handle_setup(
@@ -58,4 +59,16 @@ pub(crate) fn handle_setup(
             })
         },
     )
+}
+
+pub(crate) fn run(
+    format: &str,
+    root: &str,
+    config_dir: &str,
+    state_dir: &str,
+    name: Option<String>,
+    apply: bool,
+    suggest: bool,
+) -> Result<i32> {
+    handle_setup(format, root, config_dir, state_dir, name, apply, suggest)
 }

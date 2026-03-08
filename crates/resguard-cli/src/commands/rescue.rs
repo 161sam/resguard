@@ -59,3 +59,15 @@ pub(crate) fn handle_rescue(
         },
     )
 }
+
+pub(crate) fn run(
+    root: &str,
+    config_dir: &str,
+    state_dir: &str,
+    class: String,
+    command: Option<String>,
+    no_ui: bool,
+    no_check: bool,
+) -> Result<i32> {
+    handle_rescue(root, config_dir, state_dir, class, command, no_ui, no_check)
+}

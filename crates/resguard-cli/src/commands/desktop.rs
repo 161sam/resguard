@@ -1,14 +1,15 @@
+use crate::cli::{DesktopCmd as CliDesktopCmd, DesktopOrigin as CliDesktopOrigin};
 use crate::*;
 
 pub(crate) fn handle_desktop_list(
     format: &str,
     filter: Option<String>,
-    origin: DesktopOrigin,
+    origin: CliDesktopOrigin,
 ) -> Result<i32> {
     let mapped = match origin {
-        DesktopOrigin::User => resguard_services::desktop_service::DesktopOrigin::User,
-        DesktopOrigin::System => resguard_services::desktop_service::DesktopOrigin::System,
-        DesktopOrigin::All => resguard_services::desktop_service::DesktopOrigin::All,
+        CliDesktopOrigin::User => resguard_services::desktop_service::DesktopOrigin::User,
+        CliDesktopOrigin::System => resguard_services::desktop_service::DesktopOrigin::System,
+        CliDesktopOrigin::All => resguard_services::desktop_service::DesktopOrigin::All,
     };
     resguard_services::desktop_service::desktop_list(format, filter, mapped)
 }
@@ -279,4 +280,33 @@ pub(crate) fn handle_desktop_doctor() -> Result<i32> {
         let (partial, _) = run_desktop_doctor_checks(true, true)?;
         Ok(partial_exit_code(partial))
     })
+}
+
+pub(crate) fn run(format: &str, cmd: CliDesktopCmd) -> Result<i32> {
+    match cmd {
+        CliDesktopCmd::List { filter, origin } => handle_desktop_list(format, filter, origin),
+        CliDesktopCmd::Wrap {
+            desktop_id,
+            class,
+            dry_run,
+            print_only,
+            override_mode,
+            force,
+        } => handle_desktop_wrap(
+            &desktop_id,
+            &class,
+            DesktopWrapOptions {
+                force,
+                dry_run,
+                print_only,
+                override_mode,
+            },
+        ),
+        CliDesktopCmd::Unwrap {
+            desktop_id,
+            class,
+            override_mode,
+        } => handle_desktop_unwrap(&desktop_id, &class, DesktopUnwrapOptions { override_mode }),
+        CliDesktopCmd::Doctor => handle_desktop_doctor(),
+    }
 }

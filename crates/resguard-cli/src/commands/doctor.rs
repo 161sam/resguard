@@ -10,3 +10,7 @@ pub(crate) fn handle_doctor(root: &str, state_dir: &str) -> Result<i32> {
         Ok(desktop_partial)
     })
 }
+
+pub(crate) fn run(root: &str, state_dir: &str) -> Result<i32> {
+    handle_doctor(root, state_dir)
+}

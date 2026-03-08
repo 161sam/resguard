@@ -1,3 +1,4 @@
+use crate::cli::SuggestRequest;
 use crate::*;
 use resguard_services::suggest_service::{suggest, SuggestRequest as ServiceSuggestRequest};
 
@@ -39,4 +40,8 @@ pub(crate) fn handle_suggest(req: SuggestRequest) -> Result<i32> {
             }
         },
     )
+}
+
+pub(crate) fn run(req: SuggestRequest) -> Result<i32> {
+    handle_suggest(req)
 }

@@ -3,8 +3,14 @@ pub(crate) mod daemon;
 pub(crate) mod desktop;
 pub(crate) mod doctor;
 pub(crate) mod metrics;
+pub(crate) mod panic;
+pub(crate) mod profile;
 pub(crate) mod rescue;
+pub(crate) mod rollback;
+pub(crate) mod run;
 pub(crate) mod setup;
+pub(crate) mod status;
 pub(crate) mod suggest;
 #[cfg(feature = "tui")]
 pub(crate) mod tui;
+pub(crate) mod version;

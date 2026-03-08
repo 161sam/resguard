@@ -66,11 +66,7 @@ fn print_desktop_table(items: &[DesktopEntry]) {
         };
         println!(
             "{}\t{}\t{}\t{}\t{}",
-            item.desktop_id,
-            origin,
-            item.path,
-            item.name,
-            item.exec
+            item.desktop_id, origin, item.path, item.name, item.exec
         );
     }
 }

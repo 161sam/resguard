@@ -1,3 +1,4 @@
+use crate::cli::ApplyOptions;
 use crate::*;
 use resguard_services::apply_service::{apply, ApplyRequest};
 
@@ -20,4 +21,14 @@ pub(crate) fn handle_apply(
         force: opts.force,
         user_daemon_reload: opts.user_daemon_reload,
     })
+}
+
+pub(crate) fn run(
+    root: &str,
+    config_dir: &str,
+    state_dir: &str,
+    profile: String,
+    opts: ApplyOptions,
+) -> Result<i32> {
+    handle_apply(root, config_dir, state_dir, &profile, &opts)
 }

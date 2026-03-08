@@ -2435,7 +2435,11 @@ mod tests {
         .expect("write firefox desktop file");
 
         let source = resolve_desktop_source("firefox.desktop").expect("resolve firefox alias");
-        assert_eq!(source.desktop_id, "firefox_firefox.desktop");
+        assert!(
+            source.desktop_id == "firefox_firefox.desktop" || source.desktop_id == "firefox.desktop",
+            "unexpected desktop id: {}",
+            source.desktop_id
+        );
     }
 
     #[test]

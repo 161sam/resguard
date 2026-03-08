@@ -98,7 +98,8 @@ Optional Desktop-Wrap (Beispiel):
 
 ```bash
 resguard desktop list --filter firefox
-resguard desktop wrap org.mozilla.firefox.desktop --class browsers
+# auf Ubuntu/Snap oft: firefox_firefox.desktop
+resguard desktop wrap firefox.desktop --class browsers
 sudo resguard apply auto --user-daemon-reload
 ```
 

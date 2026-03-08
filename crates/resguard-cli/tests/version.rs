@@ -2,10 +2,7 @@ use std::process::Command;
 
 fn run_resguard(args: &[&str]) -> (bool, String, String) {
     let bin = env!("CARGO_BIN_EXE_resguard");
-    let out = Command::new(bin)
-        .args(args)
-        .output()
-        .expect("run resguard");
+    let out = Command::new(bin).args(args).output().expect("run resguard");
     (
         out.status.success(),
         String::from_utf8_lossy(&out.stdout).into_owned(),

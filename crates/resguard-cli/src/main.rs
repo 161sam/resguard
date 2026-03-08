@@ -1110,29 +1110,142 @@ fn parse_first_exec_token(exec: &str) -> Option<String> {
     None
 }
 
+fn parse_snap_run_app(exec: &str) -> Option<String> {
+    let mut cleaned = Vec::new();
+    for tok in exec.split_whitespace() {
+        if tok == "env" {
+            continue;
+        }
+        if tok.contains('=') && tok.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+            continue;
+        }
+        let t = tok.trim_matches('"').trim_matches('\'');
+        if !t.is_empty() {
+            cleaned.push(t.to_string());
+        }
+    }
+
+    let mut i = 0usize;
+    while i + 2 < cleaned.len() {
+        let base = Path::new(&cleaned[i])
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or(&cleaned[i]);
+        if base == "snap" && cleaned[i + 1] == "run" {
+            for app in &cleaned[(i + 2)..] {
+                if app.starts_with('-') {
+                    continue;
+                }
+                return Some(app.to_string());
+            }
+            return None;
+        }
+        i += 1;
+    }
+    None
+}
+
+fn parse_snap_app_from_scope(scope: &str) -> Option<String> {
+    let mut s = scope.strip_suffix(".scope").unwrap_or(scope);
+    if let Some(rest) = s.strip_prefix("app-") {
+        s = rest;
+    }
+    let rest = s.strip_prefix("snap.")?;
+    let mut parts = rest.split('.');
+    let _snap_name = parts.next()?;
+    let app_raw = parts.next()?;
+    let app = app_raw
+        .split_once('-')
+        .map(|(left, _)| left)
+        .unwrap_or(app_raw);
+    if app.is_empty() {
+        None
+    } else {
+        Some(app.to_string())
+    }
+}
+
+fn index_desktop_exec_key(map: &mut HashMap<String, Vec<String>>, key: String, desktop_id: &str) {
+    if key.is_empty() {
+        return;
+    }
+    let ids = map.entry(key).or_default();
+    if !ids.iter().any(|v| v == desktop_id) {
+        ids.push(desktop_id.to_string());
+    }
+}
+
+fn desktop_id_stem(desktop_id: &str) -> Option<&str> {
+    desktop_id.strip_suffix(".desktop")
+}
+
+fn snap_app_from_desktop_id(desktop_id: &str) -> Option<String> {
+    let stem = desktop_id_stem(desktop_id)?;
+    if let Some((_, app)) = stem.split_once('_') {
+        if !app.is_empty() {
+            return Some(app.to_string());
+        }
+    }
+    if let Some(rest) = stem.strip_prefix("snap.") {
+        let mut parts = rest.split('.');
+        let _snap_name = parts.next()?;
+        let app = parts.next()?;
+        if !app.is_empty() {
+            return Some(app.to_string());
+        }
+    }
+    None
+}
+
 fn build_desktop_exec_index() -> HashMap<String, Vec<String>> {
     let mut map: HashMap<String, Vec<String>> = HashMap::new();
     if let Ok(entries) = discover_desktop_entries(DesktopOrigin::All, None) {
         for item in entries {
             if let Some(bin) = parse_first_exec_token(&item.exec) {
-                let ids = map.entry(bin).or_default();
-                if !ids.iter().any(|v| v == &item.desktop_id) {
-                    ids.push(item.desktop_id);
-                }
+                index_desktop_exec_key(&mut map, bin, &item.desktop_id);
+            }
+            if let Some(snap_app) = parse_snap_run_app(&item.exec) {
+                index_desktop_exec_key(&mut map, format!("snap:{snap_app}"), &item.desktop_id);
+            }
+            if let Some(snap_app) = snap_app_from_desktop_id(&item.desktop_id) {
+                index_desktop_exec_key(&mut map, format!("snap:{snap_app}"), &item.desktop_id);
             }
         }
     }
     map
 }
 
-fn unique_desktop_id_for_exec(
+fn unique_desktop_id_for_scope_exec(
+    scope: &str,
     exec_start: &str,
     desktop_by_exec: &HashMap<String, Vec<String>>,
 ) -> Option<String> {
-    let bin = parse_first_exec_token(exec_start)?;
-    let ids = desktop_by_exec.get(&bin)?;
-    if ids.len() == 1 {
-        return ids.first().cloned();
+    let mut candidates = Vec::new();
+    if let Some(bin) = parse_first_exec_token(exec_start) {
+        candidates.push(bin);
+    }
+    if let Some(snap_app) = parse_snap_run_app(exec_start) {
+        candidates.push(format!("snap:{snap_app}"));
+        candidates.push(snap_app);
+    }
+    if let Some(snap_app) = parse_snap_app_from_scope(scope) {
+        candidates.push(format!("snap:{snap_app}"));
+        candidates.push(snap_app);
+    }
+
+    let mut matches: Vec<String> = Vec::new();
+    for key in candidates {
+        if let Some(ids) = desktop_by_exec.get(&key) {
+            for id in ids {
+                if !matches.iter().any(|v| v == id) {
+                    matches.push(id.clone());
+                }
+            }
+        }
+    }
+
+    if matches.len() == 1 {
+        return matches.first().cloned();
     }
     None
 }
@@ -1781,22 +1894,60 @@ fn short_exec(exec: &str) -> String {
     exec.chars().take(max - 3).collect::<String>() + "..."
 }
 
+fn push_scan_dir(
+    out: &mut Vec<(PathBuf, DesktopOrigin)>,
+    seen: &mut std::collections::BTreeSet<PathBuf>,
+    dir: PathBuf,
+    origin: DesktopOrigin,
+) {
+    if seen.insert(dir.clone()) {
+        out.push((dir, origin));
+    }
+}
+
 fn desktop_scan_dirs() -> Vec<(PathBuf, DesktopOrigin)> {
     let mut dirs = Vec::new();
-    if let Some(home) = env::var_os("HOME") {
-        dirs.push((
-            PathBuf::from(home).join(".local/share/applications"),
+    let mut seen = std::collections::BTreeSet::new();
+
+    let user_data_home = env::var_os("XDG_DATA_HOME")
+        .map(PathBuf::from)
+        .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
+    if let Some(data_home) = user_data_home {
+        push_scan_dir(
+            &mut dirs,
+            &mut seen,
+            data_home.join("applications"),
             DesktopOrigin::User,
-        ));
+        );
     }
-    dirs.push((
-        PathBuf::from("/usr/local/share/applications"),
-        DesktopOrigin::System,
-    ));
-    dirs.push((
-        PathBuf::from("/usr/share/applications"),
-        DesktopOrigin::System,
-    ));
+
+    if let Some(raw) = env::var_os("XDG_DATA_DIRS") {
+        for dir in env::split_paths(&raw) {
+            if dir.as_os_str().is_empty() {
+                continue;
+            }
+            push_scan_dir(
+                &mut dirs,
+                &mut seen,
+                dir.join("applications"),
+                DesktopOrigin::System,
+            );
+        }
+    }
+
+    for path in [
+        "/usr/local/share/applications",
+        "/usr/share/applications",
+        "/var/lib/snapd/desktop/applications",
+    ] {
+        push_scan_dir(
+            &mut dirs,
+            &mut seen,
+            PathBuf::from(path),
+            DesktopOrigin::System,
+        );
+    }
+
     dirs
 }
 
@@ -1832,6 +1983,67 @@ fn resolve_desktop_source(desktop_id: &str) -> Result<DesktopSourceEntry> {
             source_content: content,
             fields,
         });
+    }
+
+    let requested_stem = desktop_id
+        .strip_suffix(".desktop")
+        .ok_or_else(|| anyhow!("desktop id must end with .desktop"))?;
+    let entries = discover_desktop_entries(DesktopOrigin::All, None)?;
+    let mut alias_hits: Vec<DesktopListItem> = Vec::new();
+    for item in entries {
+        let Some(stem) = item.desktop_id.strip_suffix(".desktop") else {
+            continue;
+        };
+        let stem_match = stem.ends_with(&format!("_{requested_stem}"))
+            || stem.starts_with(&format!("snap.{requested_stem}."));
+        let exec_match =
+            parse_first_exec_token(&item.exec).is_some_and(|bin| bin == requested_stem);
+        let name_match = item.name.eq_ignore_ascii_case(requested_stem);
+        if stem_match || exec_match || name_match {
+            alias_hits.push(item);
+        }
+    }
+
+    if alias_hits.len() == 1 {
+        let only = alias_hits
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow!("internal alias resolution error"))?;
+        let source_path = PathBuf::from(&only.path);
+        let source_content = fs::read_to_string(&source_path)
+            .with_context(|| format!("failed to read desktop file {}", source_path.display()))?;
+        let fields = parse_desktop_entry(&source_content);
+        if fields.is_empty() {
+            return Err(anyhow!(
+                "desktop entry {} has no [Desktop Entry] group",
+                source_path.display()
+            ));
+        }
+        return Ok(DesktopSourceEntry {
+            desktop_id: only.desktop_id,
+            source_path,
+            origin: if only.origin == "user" {
+                DesktopOrigin::User
+            } else {
+                DesktopOrigin::System
+            },
+            source_content,
+            fields,
+        });
+    }
+
+    if !alias_hits.is_empty() {
+        let suggestions = alias_hits
+            .iter()
+            .take(5)
+            .map(|v| v.desktop_id.clone())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(anyhow!(
+            "desktop id '{}' not found exactly; multiple candidates found: {}",
+            desktop_id,
+            suggestions
+        ));
     }
 
     Err(anyhow!(
@@ -2594,17 +2806,23 @@ mod tests {
 
     struct HomeEnvGuard {
         old_home: Option<std::ffi::OsString>,
+        old_xdg_data_home: Option<std::ffi::OsString>,
         _lock: MutexGuard<'static, ()>,
     }
 
     impl HomeEnvGuard {
         fn set(home: &Path) -> Self {
             let lock = HOME_ENV_LOCK.get_or_init(|| Mutex::new(()));
-            let guard = lock.lock().expect("acquire HOME env lock");
+            let guard = lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             let old_home = std::env::var_os("HOME");
+            let old_xdg_data_home = std::env::var_os("XDG_DATA_HOME");
             std::env::set_var("HOME", home);
+            std::env::set_var("XDG_DATA_HOME", home.join(".local/share"));
             Self {
                 old_home,
+                old_xdg_data_home,
                 _lock: guard,
             }
         }
@@ -2615,6 +2833,56 @@ mod tests {
             match self.old_home.take() {
                 Some(v) => std::env::set_var("HOME", v),
                 None => std::env::remove_var("HOME"),
+            }
+            match self.old_xdg_data_home.take() {
+                Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+                None => std::env::remove_var("XDG_DATA_HOME"),
+            }
+        }
+    }
+
+    struct DesktopEnvGuard {
+        old_xdg_data_home: Option<std::ffi::OsString>,
+        old_xdg_data_dirs: Option<std::ffi::OsString>,
+        _lock: MutexGuard<'static, ()>,
+    }
+
+    impl DesktopEnvGuard {
+        fn set(
+            xdg_data_home: Option<&std::path::Path>,
+            xdg_data_dirs: Option<&std::ffi::OsStr>,
+        ) -> Self {
+            let lock = HOME_ENV_LOCK.get_or_init(|| Mutex::new(()));
+            let guard = lock
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let old_xdg_data_home = std::env::var_os("XDG_DATA_HOME");
+            let old_xdg_data_dirs = std::env::var_os("XDG_DATA_DIRS");
+            match xdg_data_home {
+                Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+                None => std::env::remove_var("XDG_DATA_HOME"),
+            }
+            match xdg_data_dirs {
+                Some(v) => std::env::set_var("XDG_DATA_DIRS", v),
+                None => std::env::remove_var("XDG_DATA_DIRS"),
+            }
+            Self {
+                old_xdg_data_home,
+                old_xdg_data_dirs,
+                _lock: guard,
+            }
+        }
+    }
+
+    impl Drop for DesktopEnvGuard {
+        fn drop(&mut self) {
+            match self.old_xdg_data_home.take() {
+                Some(v) => std::env::set_var("XDG_DATA_HOME", v),
+                None => std::env::remove_var("XDG_DATA_HOME"),
+            }
+            match self.old_xdg_data_dirs.take() {
+                Some(v) => std::env::set_var("XDG_DATA_DIRS", v),
+                None => std::env::remove_var("XDG_DATA_DIRS"),
             }
         }
     }
@@ -3031,6 +3299,18 @@ mod tests {
             parse_first_exec_token("code --new-window").as_deref(),
             Some("code")
         );
+        assert_eq!(
+            parse_snap_run_app("/usr/bin/snap run firefox").as_deref(),
+            Some("firefox")
+        );
+        assert_eq!(
+            parse_snap_run_app("env BAMF=1 /usr/bin/snap run --command=sh code").as_deref(),
+            Some("code")
+        );
+        assert_eq!(
+            parse_snap_app_from_scope("app-snap.firefox.firefox-1234.scope").as_deref(),
+            Some("firefox")
+        );
     }
 
     #[test]
@@ -3082,10 +3362,91 @@ mod tests {
             ],
         );
         assert_eq!(
-            unique_desktop_id_for_exec("/usr/bin/firefox %u", &idx).as_deref(),
+            unique_desktop_id_for_scope_exec("app-foo.scope", "/usr/bin/firefox %u", &idx)
+                .as_deref(),
             Some("firefox.desktop")
         );
-        assert!(unique_desktop_id_for_exec("code --new-window", &idx).is_none());
+        assert!(
+            unique_desktop_id_for_scope_exec("app-bar.scope", "code --new-window", &idx).is_none()
+        );
+    }
+
+    #[test]
+    fn unique_desktop_id_resolution_supports_snap_scope_exec() {
+        let mut idx: HashMap<String, Vec<String>> = HashMap::new();
+        idx.insert(
+            "snap:firefox".to_string(),
+            vec!["firefox_firefox.desktop".to_string()],
+        );
+
+        assert_eq!(
+            unique_desktop_id_for_scope_exec(
+                "app-snap.firefox.firefox-1234.scope",
+                "/usr/bin/snap run firefox",
+                &idx
+            )
+            .as_deref(),
+            Some("firefox_firefox.desktop")
+        );
+    }
+
+    #[test]
+    fn desktop_scan_dirs_include_snap_and_xdg_paths() {
+        let temp = tempdir().expect("tempdir");
+        let xdg_home = temp.path().join("xdg-home");
+        let _xdg_guard = DesktopEnvGuard::set(
+            Some(&xdg_home),
+            Some(std::ffi::OsStr::new("/opt/share:/custom/share")),
+        );
+
+        let dirs = desktop_scan_dirs();
+        let paths = dirs.into_iter().map(|(p, _)| p).collect::<Vec<_>>();
+        assert!(paths.contains(&xdg_home.join("applications")));
+        assert!(paths.contains(&PathBuf::from("/opt/share/applications")));
+        assert!(paths.contains(&PathBuf::from("/custom/share/applications")));
+        assert!(paths.contains(&PathBuf::from("/var/lib/snapd/desktop/applications")));
+    }
+
+    #[test]
+    fn resolve_desktop_source_allows_unambiguous_snap_alias() {
+        let temp = tempdir().expect("tempdir");
+        let xdg_home = temp.path().join("xdg-home");
+        let _xdg_guard = DesktopEnvGuard::set(Some(&xdg_home), None);
+        let apps = xdg_home.join("applications");
+        std::fs::create_dir_all(&apps).expect("create app dir");
+        std::fs::write(
+            apps.join("resguard-testsnap_resguard-testapp.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Resguard Test App\nExec=/usr/bin/snap run resguard-testapp %u\n",
+        )
+        .expect("write desktop file");
+
+        let source = resolve_desktop_source("resguard-testapp.desktop").expect("resolve source");
+        assert_eq!(
+            source.desktop_id,
+            "resguard-testsnap_resguard-testapp.desktop"
+        );
+    }
+
+    #[test]
+    fn resolve_desktop_source_rejects_ambiguous_alias() {
+        let temp = tempdir().expect("tempdir");
+        let xdg_home = temp.path().join("xdg-home");
+        let _xdg_guard = DesktopEnvGuard::set(Some(&xdg_home), None);
+        let apps = xdg_home.join("applications");
+        std::fs::create_dir_all(&apps).expect("create app dir");
+        std::fs::write(
+            apps.join("resguard-testsnapa_resguard-ambig.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Resguard Ambig A\nExec=/usr/bin/snap run resguard-ambig %u\n",
+        )
+        .expect("write desktop file A");
+        std::fs::write(
+            apps.join("resguard-testsnapb_resguard-ambig.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Resguard Ambig B\nExec=/usr/bin/snap run resguard-ambig %u\n",
+        )
+        .expect("write desktop file B");
+
+        let err = resolve_desktop_source("resguard-ambig.desktop").expect_err("ambiguous alias");
+        assert!(err.to_string().contains("multiple candidates"));
     }
 
     #[test]

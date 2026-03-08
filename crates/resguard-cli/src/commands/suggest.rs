@@ -79,7 +79,7 @@ pub(crate) fn handle_suggest(req: SuggestRequest) -> Result<i32> {
             continue;
         };
 
-        let desktop_id = unique_desktop_id_for_exec(&exec_start, &desktop_by_exec);
+        let desktop_id = unique_desktop_id_for_scope_exec(&scope, &exec_start, &desktop_by_exec);
         let (confidence, confidence_reason) = confidence_score(
             classified.pattern_match,
             classified.memory_threshold_match,

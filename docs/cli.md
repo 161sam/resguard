@@ -246,3 +246,29 @@ Status:
 
 ## `resguard diff`
 Aktuell CLI-Stub.
+
+---
+
+## `resguard desktop list`
+Verhalten:
+
+- scannt XDG-Desktop-Verzeichnisse:
+  - `$XDG_DATA_HOME/applications` (Fallback: `$HOME/.local/share/applications`)
+  - jedes `<dir>/applications` aus `$XDG_DATA_DIRS`
+- zusätzliche Fallback-Systempfade:
+  - `/usr/local/share/applications`
+  - `/usr/share/applications`
+  - `/var/lib/snapd/desktop/applications` (Ubuntu Snap)
+
+Hinweis:
+
+- Snap-Apps wie Firefox/VS Code erscheinen typischerweise als IDs wie `firefox_firefox.desktop` oder `code_code.desktop`.
+
+---
+
+## `resguard desktop wrap <desktop_id> --class <class>`
+Verhalten:
+
+- löst Desktop-ID zuerst exakt auf
+- wenn nicht gefunden: versucht sichere Alias-Auflösung für häufige Snap-Namen (z. B. Anfrage `firefox.desktop` -> `firefox_firefox.desktop`) nur bei eindeutiger Zuordnung
+- bei mehreren Treffern: Fehler mit Kandidatenliste (kein unsicheres Rateverhalten)

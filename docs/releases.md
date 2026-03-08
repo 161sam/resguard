@@ -74,18 +74,18 @@ If `RESGUARD_APT_GPG_PRIVATE_KEY` is missing:
 
 ## Backfill an existing tag
 
-Use this when a release tag already exists (for example `v0.2.1`) but release/APT assets were not published yet.
+Use this when a release tag already exists (for example `v0.3.0`) but release/APT assets were not published yet.
 
 For each workflow (`Release Upload` and `APT Repository Pages`), run `workflow_dispatch` with:
 
-- `release_tag`: existing tag to publish to (for example `v0.2.1`)
+- `release_tag`: existing tag to publish to (for example `v0.3.0`)
 - `source_ref`: branch/commit containing the publishing automation (default `main`)
 
 Notes:
 
 - `source_ref` controls which scripts are checked out and executed.
 - `release_tag` controls the target GitHub Release tag and expected version.
-- workflows fail if `packaging/deb/control` version from `source_ref` does not match `release_tag` (for example source version `0.2.2` with `release_tag=v0.2.1`).
+- workflows fail if `packaging/deb/control` version from `source_ref` does not match `release_tag` (for example source version `0.3.1` with `release_tag=v0.3.0`).
 
 ## Verification checklist
 

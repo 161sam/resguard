@@ -4,30 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Planned (v0.3.0)
-- Auto-classification mapping model (`desktop-id -> class`) with audit-friendly updates.
-- Suggestions engine for class mapping recommendations.
-- Optional `resguardd` hooks for richer event input (not required for core workflows).
-
 ### Planned (v0.4.0)
 - TUI visualizer for pressure/slice/cgroup observability.
 - Optional freeze watchdog with guarded panic actions and explicit safety controls.
 
-## [0.2.1] - Unreleased
+## [0.3.0] - 2026-03-08
 
 ### Added
-- Desktop wrapper generator commands: `desktop list`, `desktop wrap`, `desktop unwrap`, `desktop doctor`.
-- XDG desktop discovery (`/usr/share/applications`, `/usr/local/share/applications`, `~/.local/share/applications`).
-- Wrapper generation with safe side-by-side IDs (`<desktop_id>.resguard-<class>.desktop`) and mapping store at `~/.config/resguard/desktop-mapping.yml`.
-- Desktop wrapper safety hardening (desktop ID validation, wrapper path containment, safe unwrap behavior).
-- Integrated diagnostics: `doctor` now includes desktop checks when mappings exist and prints actionable fix commands.
+- Practical `suggest --apply` flow for common Ubuntu Snap desktop apps with threshold-gated auto-wrap behavior.
+- Stronger desktop doctor guidance for session/launcher refresh after wrapper and slice changes.
+- Output hardening tests for suggest planning/apply behavior and metrics/doctor/status formatting helpers.
 
 ### Changed
-- CLI/manpage/docs aligned for desktop wrapper workflows in v0.2.
-- `resguard` remains on `0.2.x` for bugfix/stabilization.
-- `tui` stays feature-gated behind `--features tui`.
-- `resguardd` build/install path remains optional (not always-on by default).
-- Packaging metadata/version bumped to `0.2.1`.
+- Desktop discovery now includes Ubuntu Snap desktop path handling and safe alias resolution for common IDs (for example `firefox.desktop` -> `firefox_firefox.desktop` when unique).
+- Wrapper rendering now consistently forces `DBusActivatable=false` for wrapped desktop entries to avoid launcher bypass of wrapper `Exec`.
+- `doctor`, `status`, and `metrics` output now use more stable sections and clearer action hints while retaining script-friendly key/value lines.
+- Packaging metadata/version bumped to `0.3.0`.
 
 ### Docs
-- Added release process doc: `docs/releases.md` (tagging, changelog, deb build).
+- Updated install/release docs and v0.3.0 hardening checklist to reflect real Ubuntu field results and release readiness decisions.
+
+## [0.2.1] - 2026-03-07

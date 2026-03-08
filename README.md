@@ -2,12 +2,13 @@
 
 Resguard ist ein natives Linux-Tool für Ressourcen-Isolation mit systemd slices und cgroups v2.
 
-## Aktueller Stand (v0.2)
+## Aktueller Stand (v0.3)
 
 Implementiert:
 
 - Profilschema + Validation
 - `init`, `apply`, `rollback`, `run`, `status`
+- `suggest` mit confidence-threshold und optionalem `--apply`
 - `desktop list`, `desktop wrap`, `desktop unwrap`, `desktop doctor`
 - `--root`-Isolation für sichere Testläufe ohne `/etc` zu ändern
 - State/Backup/Manifest für Rollback
@@ -29,17 +30,17 @@ cargo build
 
 ### Download .deb from GitHub Release
 
-Manueller Installationsweg pro Version (aktuell `v0.2.1`):
+Manueller Installationsweg pro Version (aktuell `v0.3.0`):
 
 ```bash
-curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.2.1/resguard_0.2.1_amd64.deb"
-sudo apt install -y ./resguard_0.2.1_amd64.deb
+curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.3.0/resguard_0.3.0_amd64.deb"
+sudo apt install -y ./resguard_0.3.0_amd64.deb
 ```
 
 Optional: Checksum verifizieren
 
 ```bash
-curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.2.1/SHA256SUMS"
+curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.3.0/SHA256SUMS"
 sha256sum -c SHA256SUMS --ignore-missing
 ```
 
@@ -47,8 +48,8 @@ Optional: Daemon-Variante installieren (enthält zusätzlich `resguardd` + syste
 Der Daemon bleibt nach Installation deaktiviert, bis er explizit aktiviert wird.
 
 ```bash
-curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.2.1/resguard_0.2.1_amd64_daemon.deb"
-sudo apt install -y ./resguard_0.2.1_amd64_daemon.deb
+curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.3.0/resguard_0.3.0_amd64_daemon.deb"
+sudo apt install -y ./resguard_0.3.0_amd64_daemon.deb
 ```
 
 ### Install via APT repository

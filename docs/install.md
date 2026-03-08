@@ -10,22 +10,22 @@ Resguard bietet zwei offizielle Installationswege:
 Manueller Weg, wenn du eine konkrete Version direkt installieren willst.
 
 ```bash
-curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.2.1/resguard_0.2.1_amd64.deb"
-sudo apt install -y ./resguard_0.2.1_amd64.deb
+curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.3.0/resguard_0.3.0_amd64.deb"
+sudo apt install -y ./resguard_0.3.0_amd64.deb
 ```
 
 Optional: SHA256 prüfen
 
 ```bash
-curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.2.1/SHA256SUMS"
+curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.3.0/SHA256SUMS"
 sha256sum -c SHA256SUMS --ignore-missing
 ```
 
 Optional: Daemon-Variante installieren (zusätzliche `resguardd`-Assets, nicht auto-enabled):
 
 ```bash
-curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.2.1/resguard_0.2.1_amd64_daemon.deb"
-sudo apt install -y ./resguard_0.2.1_amd64_daemon.deb
+curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.3.0/resguard_0.3.0_amd64_daemon.deb"
+sudo apt install -y ./resguard_0.3.0_amd64_daemon.deb
 ```
 
 Upgrade auf neue Versionen erfolgt erneut per Download + Installation.
@@ -81,8 +81,8 @@ Wenn du den optionalen Daemon nutzen willst:
 2. Danach das versionsgleiche Daemon-Asset installieren:
 
 ```bash
-curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.2.1/resguard_0.2.1_amd64_daemon.deb"
-sudo apt install -y ./resguard_0.2.1_amd64_daemon.deb
+curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.3.0/resguard_0.3.0_amd64_daemon.deb"
+sudo apt install -y ./resguard_0.3.0_amd64_daemon.deb
 ```
 
 Hinweis:

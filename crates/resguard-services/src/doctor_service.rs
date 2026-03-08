@@ -33,7 +33,7 @@ where
     println!("command=doctor");
     let mut partial = false;
 
-    println!("System checks");
+    println!("== Doctor: System ==");
     let systemd_ok = check_command_success("systemctl", &["--version"]);
     if systemd_ok {
         println!("OK  systemd detected");
@@ -65,8 +65,7 @@ where
         partial = true;
     }
 
-    println!();
-    println!("Resguard checks");
+    println!("\n== Doctor: Resguard ==");
     let rooted_state_dir = resolve_with_root(root, PathBuf::from(state_dir))?;
     let state_path = rooted_state_dir.join("state.json");
     let state_present = state_path.exists();
@@ -108,16 +107,49 @@ where
         }
     }
 
-    println!();
-    println!("Hints");
-    if std::env::var("SUDO_USER").is_ok() {
-        println!("OK  sudo session detected");
+    println!("\n== Doctor: Session ==");
+    let in_sudo = std::env::var("SUDO_USER").is_ok();
+    if in_sudo {
+        println!("INFO running under sudo");
+        println!("INFO after apply, reload user daemon in the login session");
     } else {
-        println!("WARN user daemon reload may be required in active session");
-        println!("fix: systemctl --user daemon-reload");
-        println!("fix: logout/login");
+        println!("WARN not running under sudo; if slices changed, refresh user session");
+    }
+    for hint in user_daemon_reload_hints(in_sudo) {
+        println!("fix: {hint}");
+    }
+    if !in_sudo {
         partial = true;
     }
 
     Ok(if partial { 1 } else { 0 })
+}
+
+fn user_daemon_reload_hints(in_sudo: bool) -> &'static [&'static str] {
+    if in_sudo {
+        &[
+            "systemctl --user daemon-reload",
+            "resguard status",
+            "resguard metrics",
+        ]
+    } else {
+        &[
+            "systemctl --user daemon-reload",
+            "loginctl terminate-user \"$USER\"   # or logout/login",
+        ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::user_daemon_reload_hints;
+
+    #[test]
+    fn user_daemon_reload_hints_include_core_actions() {
+        let sudo_hints = user_daemon_reload_hints(true);
+        assert!(sudo_hints.iter().any(|h| h.contains("daemon-reload")));
+        let non_sudo_hints = user_daemon_reload_hints(false);
+        assert!(non_sudo_hints.iter().any(|h| h.contains("daemon-reload")));
+        assert!(non_sudo_hints.iter().any(|h| h.contains("logout/login")));
+    }
 }

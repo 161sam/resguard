@@ -932,6 +932,16 @@ pub(crate) fn status_value(props: &BTreeMap<String, String>, key: &str) -> Strin
         .unwrap_or_else(|| "-".to_string())
 }
 
+fn status_slice_line(scope: &str, unit: &str, props: &BTreeMap<String, String>) -> String {
+    format!(
+        "slice\tscope={scope}\tunit={unit}\tMemoryLow={}\tMemoryHigh={}\tMemoryMax={}\tAllowedCPUs={}",
+        status_value(props, "MemoryLow"),
+        status_value(props, "MemoryHigh"),
+        status_value(props, "MemoryMax"),
+        status_value(props, "AllowedCPUs")
+    )
+}
+
 pub(crate) fn collect_class_slices_from_state(state: &resguard_state::State) -> Vec<String> {
     let mut out = std::collections::BTreeSet::new();
     for path in &state.managed_paths {
@@ -974,19 +984,13 @@ pub(crate) fn handle_status(root: &str, state_dir: &str) -> Result<i32> {
             class_slices.join(",")
         }
     );
+    println!("\n== Status: Slice Limits ==");
 
     let keys = ["MemoryHigh", "MemoryMax", "MemoryLow", "AllowedCPUs"];
     for unit in ["system.slice", "user.slice"] {
         match systemctl_show_props(false, unit, &keys) {
             Ok(props) => {
-                println!(
-                    "{}\tMemoryLow={}\tMemoryHigh={}\tMemoryMax={}\tAllowedCPUs={}",
-                    unit,
-                    status_value(&props, "MemoryLow"),
-                    status_value(&props, "MemoryHigh"),
-                    status_value(&props, "MemoryMax"),
-                    status_value(&props, "AllowedCPUs")
-                );
+                println!("{}", status_slice_line("system", unit, &props));
             }
             Err(err) => {
                 eprintln!("warn: failed to read {}: {}", unit, err);
@@ -998,14 +1002,7 @@ pub(crate) fn handle_status(root: &str, state_dir: &str) -> Result<i32> {
     for slice in &class_slices {
         match systemctl_show_props(false, slice, &keys) {
             Ok(props) => {
-                println!(
-                    "{}\tMemoryLow={}\tMemoryHigh={}\tMemoryMax={}\tAllowedCPUs={}",
-                    slice,
-                    status_value(&props, "MemoryLow"),
-                    status_value(&props, "MemoryHigh"),
-                    status_value(&props, "MemoryMax"),
-                    status_value(&props, "AllowedCPUs")
-                );
+                println!("{}", status_slice_line("system", slice, &props));
             }
             Err(err) => {
                 eprintln!("warn: failed to read system {}: {}", slice, err);
@@ -1017,11 +1014,8 @@ pub(crate) fn handle_status(root: &str, state_dir: &str) -> Result<i32> {
     match systemctl_show_props(true, "resguard-browsers.slice", &keys) {
         Ok(props) => {
             println!(
-                "user:resguard-browsers.slice\tMemoryLow={}\tMemoryHigh={}\tMemoryMax={}\tAllowedCPUs={}",
-                status_value(&props, "MemoryLow"),
-                status_value(&props, "MemoryHigh"),
-                status_value(&props, "MemoryMax"),
-                status_value(&props, "AllowedCPUs")
+                "{}",
+                status_slice_line("user", "resguard-browsers.slice", &props)
             );
         }
         Err(err) => {
@@ -1033,6 +1027,7 @@ pub(crate) fn handle_status(root: &str, state_dir: &str) -> Result<i32> {
         }
     }
 
+    println!("\n== Status: Runtime Signals ==");
     match systemctl_is_active("systemd-oomd") {
         Ok(active) => println!("oomd_active={}", active),
         Err(err) => {
@@ -1073,6 +1068,12 @@ pub(crate) fn handle_status(root: &str, state_dir: &str) -> Result<i32> {
             eprintln!("warn: failed to read cpu PSI: {}", err);
             partial = true;
         }
+    }
+
+    if partial {
+        println!("\n== Status: Hints ==");
+        println!("hint=if slices were updated recently run: systemctl --user daemon-reload");
+        println!("hint=then verify: resguard doctor && resguard metrics");
     }
 
     if partial {
@@ -2520,6 +2521,19 @@ mod tests {
         assert!(hints
             .iter()
             .any(|hint| hint.contains("log out and log back in")));
+    }
+
+    #[test]
+    fn status_slice_line_is_readable_and_script_friendly() {
+        let mut props = BTreeMap::new();
+        props.insert("MemoryLow".to_string(), "1G".to_string());
+        props.insert("MemoryHigh".to_string(), "2G".to_string());
+        props.insert("MemoryMax".to_string(), "3G".to_string());
+        props.insert("AllowedCPUs".to_string(), "0-7".to_string());
+        let line = status_slice_line("system", "user.slice", &props);
+        assert!(line.starts_with("slice\tscope=system\tunit=user.slice\t"));
+        assert!(line.contains("MemoryHigh=2G"));
+        assert!(line.contains("AllowedCPUs=0-7"));
     }
 
     #[test]

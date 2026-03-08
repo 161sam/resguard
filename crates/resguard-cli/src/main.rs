@@ -4,6 +4,15 @@ use clap_complete::{generate, Shell};
 use regex::Regex;
 use resguard_config::{load_profile_from_store, profile_path, save_profile, validate_profile_file};
 use resguard_core::{build_apply_plan, validate_profile, Action, PlanOptions};
+use resguard_discovery::{
+    build_desktop_exec_index as discovery_build_desktop_exec_index,
+    discover_desktop_entries as discovery_discover_desktop_entries,
+    parse_first_exec_token as discovery_parse_first_exec_token,
+    parse_scope_identity as discovery_parse_scope_identity,
+    resolve_desktop_id as discovery_resolve_desktop_id,
+    unique_desktop_id_for_scope_exec as discovery_unique_desktop_id_for_scope_exec,
+    DesktopOrigin as DiscoveryOrigin, ResolutionResult as DiscoveryResolutionResult,
+};
 use resguard_model::{
     Class, Cpu, Memory, Metadata, Oomd, Profile, Spec, SuggestRule, Suggestion, SuggestionReason,
     SystemMemory, UserMemory,
@@ -1076,130 +1085,11 @@ fn systemctl_user_show_scope(scope: &str) -> Result<BTreeMap<String, String>> {
 }
 
 fn parse_first_exec_token(exec: &str) -> Option<String> {
-    for tok in exec.split_whitespace() {
-        if tok == "env" {
-            continue;
-        }
-        if tok.contains('=') && tok.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
-            continue;
-        }
-        let cleaned = tok.trim_matches('"').trim_matches('\'');
-        if cleaned.is_empty() {
-            continue;
-        }
-        let base = Path::new(cleaned)
-            .file_name()
-            .and_then(|v| v.to_str())
-            .unwrap_or(cleaned)
-            .to_string();
-        return Some(base);
-    }
-    None
-}
-
-fn parse_snap_run_app(exec: &str) -> Option<String> {
-    let mut cleaned = Vec::new();
-    for tok in exec.split_whitespace() {
-        if tok == "env" {
-            continue;
-        }
-        if tok.contains('=') && tok.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
-            continue;
-        }
-        let t = tok.trim_matches('"').trim_matches('\'');
-        if !t.is_empty() {
-            cleaned.push(t.to_string());
-        }
-    }
-
-    let mut i = 0usize;
-    while i + 2 < cleaned.len() {
-        let base = Path::new(&cleaned[i])
-            .file_name()
-            .and_then(|v| v.to_str())
-            .unwrap_or(&cleaned[i]);
-        if base == "snap" && cleaned[i + 1] == "run" {
-            for app in &cleaned[(i + 2)..] {
-                if app.starts_with('-') {
-                    continue;
-                }
-                return Some(app.to_string());
-            }
-            return None;
-        }
-        i += 1;
-    }
-    None
-}
-
-fn parse_snap_app_from_scope(scope: &str) -> Option<String> {
-    let mut s = scope.strip_suffix(".scope").unwrap_or(scope);
-    if let Some(rest) = s.strip_prefix("app-") {
-        s = rest;
-    }
-    let rest = s.strip_prefix("snap.")?;
-    let mut parts = rest.split('.');
-    let _snap_name = parts.next()?;
-    let app_raw = parts.next()?;
-    let app = app_raw
-        .split_once('-')
-        .map(|(left, _)| left)
-        .unwrap_or(app_raw);
-    if app.is_empty() {
-        None
-    } else {
-        Some(app.to_string())
-    }
-}
-
-fn index_desktop_exec_key(map: &mut HashMap<String, Vec<String>>, key: String, desktop_id: &str) {
-    if key.is_empty() {
-        return;
-    }
-    let ids = map.entry(key).or_default();
-    if !ids.iter().any(|v| v == desktop_id) {
-        ids.push(desktop_id.to_string());
-    }
-}
-
-fn desktop_id_stem(desktop_id: &str) -> Option<&str> {
-    desktop_id.strip_suffix(".desktop")
-}
-
-fn snap_app_from_desktop_id(desktop_id: &str) -> Option<String> {
-    let stem = desktop_id_stem(desktop_id)?;
-    if let Some((_, app)) = stem.split_once('_') {
-        if !app.is_empty() {
-            return Some(app.to_string());
-        }
-    }
-    if let Some(rest) = stem.strip_prefix("snap.") {
-        let mut parts = rest.split('.');
-        let _snap_name = parts.next()?;
-        let app = parts.next()?;
-        if !app.is_empty() {
-            return Some(app.to_string());
-        }
-    }
-    None
+    discovery_parse_first_exec_token(exec)
 }
 
 fn build_desktop_exec_index() -> HashMap<String, Vec<String>> {
-    let mut map: HashMap<String, Vec<String>> = HashMap::new();
-    if let Ok(entries) = discover_desktop_entries(DesktopOrigin::All, None) {
-        for item in entries {
-            if let Some(bin) = parse_first_exec_token(&item.exec) {
-                index_desktop_exec_key(&mut map, bin, &item.desktop_id);
-            }
-            if let Some(snap_app) = parse_snap_run_app(&item.exec) {
-                index_desktop_exec_key(&mut map, format!("snap:{snap_app}"), &item.desktop_id);
-            }
-            if let Some(snap_app) = snap_app_from_desktop_id(&item.desktop_id) {
-                index_desktop_exec_key(&mut map, format!("snap:{snap_app}"), &item.desktop_id);
-            }
-        }
-    }
-    map
+    discovery_build_desktop_exec_index()
 }
 
 fn unique_desktop_id_for_scope_exec(
@@ -1207,34 +1097,7 @@ fn unique_desktop_id_for_scope_exec(
     exec_start: &str,
     desktop_by_exec: &HashMap<String, Vec<String>>,
 ) -> Option<String> {
-    let mut candidates = Vec::new();
-    if let Some(bin) = parse_first_exec_token(exec_start) {
-        candidates.push(bin);
-    }
-    if let Some(snap_app) = parse_snap_run_app(exec_start) {
-        candidates.push(format!("snap:{snap_app}"));
-        candidates.push(snap_app);
-    }
-    if let Some(snap_app) = parse_snap_app_from_scope(scope) {
-        candidates.push(format!("snap:{snap_app}"));
-        candidates.push(snap_app);
-    }
-
-    let mut matches: Vec<String> = Vec::new();
-    for key in candidates {
-        if let Some(ids) = desktop_by_exec.get(&key) {
-            for id in ids {
-                if !matches.iter().any(|v| v == id) {
-                    matches.push(id.clone());
-                }
-            }
-        }
-    }
-
-    if matches.len() == 1 {
-        return matches.first().cloned();
-    }
-    None
+    discovery_unique_desktop_id_for_scope_exec(scope, exec_start, desktop_by_exec)
 }
 
 #[derive(Debug, Clone)]
@@ -1332,13 +1195,11 @@ fn classify_scope(
 }
 
 fn canonical_app_identity(scope: &str, exec_start: &str) -> Option<String> {
-    if let Some(app) = parse_snap_app_from_scope(scope) {
-        return Some(app.to_ascii_lowercase());
-    }
-    if let Some(app) = parse_snap_run_app(exec_start) {
-        return Some(app.to_ascii_lowercase());
-    }
-    parse_first_exec_token(exec_start).map(|v| v.to_ascii_lowercase())
+    let identity = discovery_parse_scope_identity(scope, exec_start);
+    identity
+        .snap_app
+        .or(identity.executable)
+        .map(|v| v.to_ascii_lowercase())
 }
 
 fn expected_class_for_known_app(app: &str) -> Option<&'static str> {
@@ -1931,252 +1792,75 @@ fn short_exec(exec: &str) -> String {
     exec.chars().take(max - 3).collect::<String>() + "..."
 }
 
-fn push_scan_dir(
-    out: &mut Vec<(PathBuf, DesktopOrigin)>,
-    seen: &mut std::collections::BTreeSet<PathBuf>,
-    dir: PathBuf,
-    origin: DesktopOrigin,
-) {
-    if seen.insert(dir.clone()) {
-        out.push((dir, origin));
-    }
-}
-
-fn desktop_scan_dirs() -> Vec<(PathBuf, DesktopOrigin)> {
-    let mut dirs = Vec::new();
-    let mut seen = std::collections::BTreeSet::new();
-
-    let user_data_home = env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .or_else(|| env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
-    if let Some(data_home) = user_data_home {
-        push_scan_dir(
-            &mut dirs,
-            &mut seen,
-            data_home.join("applications"),
-            DesktopOrigin::User,
-        );
-    }
-
-    if let Some(raw) = env::var_os("XDG_DATA_DIRS") {
-        for dir in env::split_paths(&raw) {
-            if dir.as_os_str().is_empty() {
-                continue;
-            }
-            push_scan_dir(
-                &mut dirs,
-                &mut seen,
-                dir.join("applications"),
-                DesktopOrigin::System,
-            );
-        }
-    }
-
-    for path in [
-        "/usr/local/share/applications",
-        "/usr/share/applications",
-        "/var/lib/snapd/desktop/applications",
-    ] {
-        push_scan_dir(
-            &mut dirs,
-            &mut seen,
-            PathBuf::from(path),
-            DesktopOrigin::System,
-        );
-    }
-
-    dirs
-}
-
-fn origin_matches(filter: DesktopOrigin, item_origin: DesktopOrigin) -> bool {
-    match filter {
-        DesktopOrigin::All => true,
-        DesktopOrigin::User => item_origin == DesktopOrigin::User,
-        DesktopOrigin::System => item_origin == DesktopOrigin::System,
-    }
-}
-
 fn resolve_desktop_source(desktop_id: &str) -> Result<DesktopSourceEntry> {
     validate_desktop_id(desktop_id)?;
-
-    for (dir, origin) in desktop_scan_dirs() {
-        let path = dir.join(desktop_id);
-        if !path.is_file() {
-            continue;
-        }
-        let content = fs::read_to_string(&path)
-            .with_context(|| format!("failed to read desktop file {}", path.display()))?;
-        let fields = parse_desktop_entry(&content);
-        if fields.is_empty() {
+    let resolved = match discovery_resolve_desktop_id(desktop_id) {
+        DiscoveryResolutionResult::Exact(entry) => entry,
+        DiscoveryResolutionResult::Alias { resolved, .. } => resolved,
+        DiscoveryResolutionResult::Ambiguous { candidates, .. } => {
             return Err(anyhow!(
-                "desktop entry {} has no [Desktop Entry] group",
-                path.display()
+                "desktop id '{}' not found exactly; multiple candidates found: {}",
+                desktop_id,
+                candidates.join(", ")
             ));
         }
-        return Ok(DesktopSourceEntry {
-            desktop_id: desktop_id.to_string(),
-            source_path: path,
-            origin,
-            source_content: content,
-            fields,
-        });
-    }
-
-    let requested_stem = desktop_id
-        .strip_suffix(".desktop")
-        .ok_or_else(|| anyhow!("desktop id must end with .desktop"))?;
-    let entries = discover_desktop_entries(DesktopOrigin::All, None)?;
-    let mut alias_hits_by_id: BTreeMap<String, DesktopListItem> = BTreeMap::new();
-    for item in entries {
-        let Some(stem) = item.desktop_id.strip_suffix(".desktop") else {
-            continue;
-        };
-        let stem_match = stem.ends_with(&format!("_{requested_stem}"))
-            || stem.starts_with(&format!("snap.{requested_stem}."));
-        let exec_match =
-            parse_first_exec_token(&item.exec).is_some_and(|bin| bin == requested_stem);
-        let name_match = item.name.eq_ignore_ascii_case(requested_stem);
-        if stem_match || exec_match || name_match {
-            match alias_hits_by_id.get(&item.desktop_id) {
-                Some(existing) if existing.origin == "user" => {}
-                _ => {
-                    alias_hits_by_id.insert(item.desktop_id.clone(), item);
-                }
-            }
-        }
-    }
-    let alias_hits: Vec<DesktopListItem> = alias_hits_by_id.into_values().collect();
-
-    if alias_hits.len() == 1 {
-        let only = alias_hits
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow!("internal alias resolution error"))?;
-        let source_path = PathBuf::from(&only.path);
-        let source_content = fs::read_to_string(&source_path)
-            .with_context(|| format!("failed to read desktop file {}", source_path.display()))?;
-        let fields = parse_desktop_entry(&source_content);
-        if fields.is_empty() {
+        DiscoveryResolutionResult::NotFound { .. } => {
             return Err(anyhow!(
-                "desktop entry {} has no [Desktop Entry] group",
-                source_path.display()
+                "desktop id '{}' not found in XDG search paths",
+                desktop_id
             ));
         }
-        return Ok(DesktopSourceEntry {
-            desktop_id: only.desktop_id,
-            source_path,
-            origin: if only.origin == "user" {
-                DesktopOrigin::User
-            } else {
-                DesktopOrigin::System
-            },
-            source_content,
-            fields,
-        });
-    }
+    };
 
-    if !alias_hits.is_empty() {
-        let suggestions = alias_hits
-            .iter()
-            .take(5)
-            .map(|v| v.desktop_id.clone())
-            .collect::<Vec<_>>()
-            .join(", ");
-        return Err(anyhow!(
-            "desktop id '{}' not found exactly; multiple candidates found: {}",
-            desktop_id,
-            suggestions
-        ));
-    }
-
-    Err(anyhow!(
-        "desktop id '{}' not found in XDG search paths",
-        desktop_id
-    ))
+    Ok(DesktopSourceEntry {
+        desktop_id: resolved.desktop_id,
+        source_path: PathBuf::from(resolved.path),
+        origin: match resolved.origin {
+            DiscoveryOrigin::User => DesktopOrigin::User,
+            DiscoveryOrigin::System => DesktopOrigin::System,
+            DiscoveryOrigin::All => DesktopOrigin::All,
+        },
+        source_content: resolved.source_content,
+        fields: resolved.fields.into_iter().collect(),
+    })
 }
 
 fn discover_desktop_entries(
     origin_filter: DesktopOrigin,
     name_filter: Option<&Regex>,
 ) -> Result<Vec<DesktopListItem>> {
+    let d_origin = match origin_filter {
+        DesktopOrigin::User => DiscoveryOrigin::User,
+        DesktopOrigin::System => DiscoveryOrigin::System,
+        DesktopOrigin::All => DiscoveryOrigin::All,
+    };
+
     let mut items = Vec::new();
-
-    for (dir, origin) in desktop_scan_dirs() {
-        if !origin_matches(origin_filter, origin) || !dir.exists() {
-            continue;
+    for entry in discovery_discover_desktop_entries(d_origin) {
+        if let Some(re) = name_filter {
+            let hay = format!("{} {} {}", entry.desktop_id, entry.name, entry.exec);
+            if !re.is_match(&hay) {
+                continue;
+            }
         }
-        let entries = match fs::read_dir(&dir) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-
-        for entry in entries {
-            let entry = match entry {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            let path = entry.path();
-            if !path.is_file() {
-                continue;
-            }
-            if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
-                continue;
-            }
-
-            let content = match fs::read_to_string(&path) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            let map = parse_desktop_entry(&content);
-            if map.is_empty() {
-                continue;
-            }
-
-            if let Some(t) = map.get("Type") {
-                if t != "Application" {
-                    continue;
-                }
-            }
-
-            let desktop_id = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_default()
-                .to_string();
-            let name = map.get("Name").cloned().unwrap_or_default();
-            let exec = map.get("Exec").cloned().unwrap_or_default();
-
-            if let Some(re) = name_filter {
-                let hay = format!("{desktop_id} {name} {exec}");
-                if !re.is_match(&hay) {
-                    continue;
-                }
-            }
-
-            let mut fields = BTreeMap::new();
-            for (k, v) in map {
-                fields.insert(k, v);
-            }
-
-            items.push(DesktopListItem {
-                desktop_id,
-                name,
-                exec,
-                icon: fields.get("Icon").cloned(),
-                try_exec: fields.get("TryExec").cloned(),
-                terminal: fields.get("Terminal").cloned(),
-                entry_type: fields.get("Type").cloned(),
-                path: path.display().to_string(),
-                origin: match origin {
-                    DesktopOrigin::User => "user".to_string(),
-                    DesktopOrigin::System => "system".to_string(),
-                    DesktopOrigin::All => "all".to_string(),
-                },
-                fields,
-            });
-        }
+        let fields = entry.fields;
+        items.push(DesktopListItem {
+            desktop_id: entry.desktop_id,
+            name: entry.name,
+            exec: entry.exec,
+            icon: fields.get("Icon").cloned(),
+            try_exec: fields.get("TryExec").cloned(),
+            terminal: fields.get("Terminal").cloned(),
+            entry_type: fields.get("Type").cloned(),
+            path: entry.path,
+            origin: match entry.origin {
+                DiscoveryOrigin::User => "user".to_string(),
+                DiscoveryOrigin::System => "system".to_string(),
+                DiscoveryOrigin::All => "all".to_string(),
+            },
+            fields,
+        });
     }
-
     items.sort_by(|a, b| {
         a.desktop_id
             .cmp(&b.desktop_id)
@@ -3343,15 +3027,19 @@ mod tests {
             Some("code")
         );
         assert_eq!(
-            parse_snap_run_app("/usr/bin/snap run firefox").as_deref(),
+            resguard_discovery::parse_snap_run_app("/usr/bin/snap run firefox").as_deref(),
             Some("firefox")
         );
         assert_eq!(
-            parse_snap_run_app("env BAMF=1 /usr/bin/snap run --command=sh code").as_deref(),
+            resguard_discovery::parse_snap_run_app(
+                "env BAMF=1 /usr/bin/snap run --command=sh code"
+            )
+            .as_deref(),
             Some("code")
         );
         assert_eq!(
-            parse_snap_app_from_scope("app-snap.firefox.firefox-1234.scope").as_deref(),
+            resguard_discovery::parse_snap_app_from_scope("app-snap.firefox.firefox-1234.scope")
+                .as_deref(),
             Some("firefox")
         );
     }
@@ -3507,7 +3195,19 @@ mod tests {
             Some(std::ffi::OsStr::new("/opt/share:/custom/share")),
         );
 
-        let dirs = desktop_scan_dirs();
+        let dirs = resguard_discovery::desktop_scan_dirs()
+            .into_iter()
+            .map(|(path, origin)| {
+                (
+                    path,
+                    match origin {
+                        DiscoveryOrigin::User => DesktopOrigin::User,
+                        DiscoveryOrigin::System => DesktopOrigin::System,
+                        DiscoveryOrigin::All => DesktopOrigin::All,
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
         let paths = dirs.into_iter().map(|(p, _)| p).collect::<Vec<_>>();
         assert!(paths.contains(&xdg_home.join("applications")));
         assert!(paths.contains(&PathBuf::from("/opt/share/applications")));

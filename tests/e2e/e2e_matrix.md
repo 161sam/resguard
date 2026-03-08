@@ -6,7 +6,7 @@ Use this matrix for reproducible field validation on Ubuntu/Kubuntu hosts.
 
 | Host | Desktop | Session | Kernel | RAM | Script Result | Result File | Notes |
 |---|---|---|---|---|---|---|---|
-| Ubuntu 24.04 | GNOME | Wayland |  |  |  |  |  |
+| Ubuntu 24.04 | GNOME | Wayland |  |  | partial-pass | `tests/e2e/results/2026-03-08-ubuntu24.04-first-field.md` | apt/setup/apply/rescue/panic/suggest OK; snap Firefox discovery gap; daemon package not installed by default |
 | Ubuntu 24.04 | GNOME | X11 |  |  |  |  |  |
 | Kubuntu 24.04 | KDE Plasma | Wayland |  |  |  |  |  |
 | Kubuntu 24.04 | KDE Plasma | X11 |  |  |  |  |  |

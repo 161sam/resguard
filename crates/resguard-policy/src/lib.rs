@@ -2,3 +2,15 @@
 //!
 //! Responsibility: validation and policy evaluation logic that turns
 //! model/discovery inputs into resource-governance decisions.
+
+pub mod autoprofile;
+pub mod classification;
+pub mod confidence;
+pub mod rules;
+pub mod thresholds;
+
+pub use autoprofile::{build_auto_profile, AutoProfileSnapshot};
+pub use classification::{classify, ClassMatch, ClassificationInput};
+pub use confidence::{score, strong_identity_match, ConfidenceScore, ConfidenceSignals};
+pub use rules::default_suggest_rules;
+pub use thresholds::{meets_confidence_threshold, validate_confidence_threshold};

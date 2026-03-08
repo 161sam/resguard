@@ -13,9 +13,13 @@ use resguard_discovery::{
     unique_desktop_id_for_scope_exec as discovery_unique_desktop_id_for_scope_exec,
     DesktopOrigin as DiscoveryOrigin, ResolutionResult as DiscoveryResolutionResult,
 };
-use resguard_model::{
-    Class, Cpu, Memory, Metadata, Oomd, Profile, Spec, SuggestRule, Suggestion, SuggestionReason,
-    SystemMemory, UserMemory,
+use resguard_model::{AppIdentity, Profile, SuggestRule, Suggestion, SuggestionReason};
+use resguard_policy::{
+    build_auto_profile as policy_build_auto_profile, classify as policy_classify,
+    default_suggest_rules as policy_default_suggest_rules,
+    meets_confidence_threshold as policy_meets_confidence_threshold, score as policy_score,
+    validate_confidence_threshold as policy_validate_confidence_threshold, AutoProfileSnapshot,
+    ClassMatch as PolicyClassMatch, ClassificationInput, ConfidenceSignals,
 };
 use resguard_state::{
     begin_transaction, manifest_from_transaction, read_backup_manifest, read_state,
@@ -23,9 +27,8 @@ use resguard_state::{
     write_state,
 };
 use resguard_system::{
-    cpu_count, default_reserve_bytes, ensure_dir, exec_command, is_root_user, read_mem_total_bytes,
-    read_pressure_1min, systemctl_cat_unit, systemctl_is_active, systemctl_show_props, systemd_run,
-    write_file,
+    cpu_count, ensure_dir, exec_command, is_root_user, read_mem_total_bytes, read_pressure_1min,
+    systemctl_cat_unit, systemctl_is_active, systemctl_show_props, systemd_run, write_file,
 };
 #[cfg(feature = "tui")]
 use resguard_system::{
@@ -388,22 +391,7 @@ fn cli_version_output() -> String {
     cmd.render_version().to_string()
 }
 
-fn format_bytes_binary(bytes: u64) -> String {
-    let gb = 1024_u64.pow(3);
-    let mb = 1024_u64.pow(2);
-    if bytes >= gb {
-        format!("{}G", bytes / gb)
-    } else if bytes >= mb {
-        format!("{}M", bytes / mb)
-    } else {
-        bytes.to_string()
-    }
-}
-
-fn clamp(value: u64, min: u64, max: u64) -> u64 {
-    value.max(min).min(max)
-}
-
+#[cfg(test)]
 fn round_down_to_step(value: u64, step: u64) -> u64 {
     if step == 0 {
         return value;
@@ -411,6 +399,7 @@ fn round_down_to_step(value: u64, step: u64) -> u64 {
     (value / step) * step
 }
 
+#[cfg(test)]
 fn round_up_to_step(value: u64, step: u64) -> u64 {
     if step == 0 {
         return value;
@@ -418,155 +407,14 @@ fn round_up_to_step(value: u64, step: u64) -> u64 {
     value.div_ceil(step) * step
 }
 
-fn reserve_rounding_step(reserve: u64) -> u64 {
-    let gb = 1024_u64.pow(3);
-    let mib_256 = 256 * 1024_u64.pow(2);
-    if reserve >= 2 * gb {
-        gb
-    } else {
-        mib_256
-    }
-}
-
-fn class_cap_percent(user_max: u64, pct: u64, hard_cap: u64) -> u64 {
-    let gb = 1024_u64.pow(3);
-    let raw = user_max.saturating_mul(pct) / 100;
-    let rounded = round_up_to_step(raw, gb);
-    clamp(rounded, gb.min(user_max), hard_cap.min(user_max))
-}
-
 fn build_auto_profile(name: &str, total_mem_bytes: u64, cpu_cores: u32) -> Profile {
-    let gb = 1024_u64.pow(3);
-    let base_reserve = default_reserve_bytes(total_mem_bytes).min(total_mem_bytes);
-    let reserve_step = reserve_rounding_step(base_reserve);
-    let reserve = round_up_to_step(base_reserve, reserve_step).min(total_mem_bytes);
-
-    let mut user_max = round_down_to_step(total_mem_bytes.saturating_sub(reserve), gb);
-    if user_max == 0 {
-        user_max = round_down_to_step(total_mem_bytes, 256 * 1024_u64.pow(2));
-    }
-
-    let high_margin = (user_max / 10).min(2 * gb);
-    let mut user_high = round_down_to_step(user_max.saturating_sub(high_margin), gb);
-    if user_high == 0 {
-        user_high = user_max;
-    }
-
-    let (cpu, oomd) = if cpu_cores >= 4 {
-        (
-            Some(Cpu {
-                enabled: Some(true),
-                reserve_core_for_system: Some(true),
-                system_allowed_cpus: Some("0".to_string()),
-                user_allowed_cpus: Some(format!("1-{}", cpu_cores - 1)),
-            }),
-            Some(Oomd {
-                enabled: Some(true),
-                memory_pressure: Some("kill".to_string()),
-                memory_pressure_limit: Some("60%".to_string()),
-            }),
-        )
-    } else {
-        (
-            Some(Cpu {
-                enabled: Some(false),
-                reserve_core_for_system: Some(false),
-                system_allowed_cpus: None,
-                user_allowed_cpus: None,
-            }),
-            Some(Oomd {
-                enabled: Some(true),
-                memory_pressure: Some("kill".to_string()),
-                memory_pressure_limit: Some("60%".to_string()),
-            }),
-        )
-    };
-
-    let browsers_max = class_cap_percent(user_max, 40, 6 * gb);
-    let ide_max = class_cap_percent(user_max, 25, 4 * gb);
-    let heavy_rest = user_max.saturating_sub(browsers_max.saturating_add(ide_max));
-    let heavy_max = if heavy_rest == 0 {
-        gb.min(user_max)
-    } else {
-        let rounded = round_down_to_step(heavy_rest, gb);
-        if rounded == 0 {
-            round_down_to_step(heavy_rest, 256 * 1024_u64.pow(2))
-        } else {
-            rounded
-        }
-    }
-    .min(8 * gb)
-    .min(user_max);
-
-    let mut classes = BTreeMap::new();
-    classes.insert(
-        "browsers".to_string(),
-        Class {
-            slice_name: Some("resguard-browsers.slice".to_string()),
-            memory_high: None,
-            memory_max: Some(format_bytes_binary(browsers_max)),
-            cpu_weight: Some(80),
-            oomd_memory_pressure: Some("kill".to_string()),
-            oomd_memory_pressure_limit: Some("55%".to_string()),
+    policy_build_auto_profile(
+        name,
+        AutoProfileSnapshot {
+            total_mem_bytes,
+            cpu_cores,
         },
-    );
-    classes.insert(
-        "ide".to_string(),
-        Class {
-            slice_name: Some("resguard-ide.slice".to_string()),
-            memory_high: None,
-            memory_max: Some(format_bytes_binary(ide_max)),
-            cpu_weight: Some(70),
-            oomd_memory_pressure: Some("kill".to_string()),
-            oomd_memory_pressure_limit: Some("60%".to_string()),
-        },
-    );
-    classes.insert(
-        "heavy".to_string(),
-        Class {
-            slice_name: Some("resguard-heavy.slice".to_string()),
-            memory_high: None,
-            memory_max: Some(format_bytes_binary(heavy_max)),
-            cpu_weight: Some(90),
-            oomd_memory_pressure: Some("kill".to_string()),
-            oomd_memory_pressure_limit: Some("50%".to_string()),
-        },
-    );
-    classes.insert(
-        "rescue".to_string(),
-        Class {
-            slice_name: Some("resguard-rescue.slice".to_string()),
-            memory_high: None,
-            memory_max: Some("1G".to_string()),
-            cpu_weight: Some(100),
-            oomd_memory_pressure: Some("kill".to_string()),
-            oomd_memory_pressure_limit: Some("70%".to_string()),
-        },
-    );
-
-    Profile {
-        api_version: "resguard.io/v1".to_string(),
-        kind: "Profile".to_string(),
-        metadata: Metadata {
-            name: name.to_string(),
-        },
-        spec: Spec {
-            memory: Some(Memory {
-                system: Some(SystemMemory {
-                    memory_low: Some(format_bytes_binary(reserve)),
-                }),
-                user: Some(UserMemory {
-                    memory_high: Some(format_bytes_binary(user_high)),
-                    memory_max: Some(format_bytes_binary(user_max)),
-                }),
-            }),
-            cpu,
-            oomd,
-            classes,
-            slices: None,
-            suggest: None,
-        },
-    }
+    )
 }
 
 fn resolve_with_root(root: &str, path: PathBuf) -> Result<PathBuf> {
@@ -1109,20 +957,7 @@ struct SuggestClassification {
 }
 
 fn default_suggest_rules() -> Vec<SuggestRule> {
-    vec![
-        SuggestRule {
-            pattern: "(?i)docker|podman|containerd".to_string(),
-            class: "heavy".to_string(),
-        },
-        SuggestRule {
-            pattern: "(?i)code|codium|idea|pycharm|clion|goland".to_string(),
-            class: "ide".to_string(),
-        },
-        SuggestRule {
-            pattern: "(?i)firefox|chrome|chromium|brave|opera|vivaldi".to_string(),
-            class: "browsers".to_string(),
-        },
-    ]
+    policy_default_suggest_rules()
 }
 
 fn classify_scope(
@@ -1132,125 +967,46 @@ fn classify_scope(
     memory_current: u64,
     rules: &[SuggestRule],
 ) -> Option<SuggestClassification> {
-    let hay = format!("{unit} {slice} {exec_start}");
-    for rule in rules {
-        if let Ok(re) = Regex::new(&rule.pattern) {
-            if re.is_match(&hay) {
-                return Some(SuggestClassification {
-                    class: rule.class.clone(),
-                    reason: format!("matched profile rule /{}/", rule.pattern),
-                    pattern_match: true,
-                    memory_threshold_match: false,
-                });
-            }
-        }
-    }
-
-    let h = hay.to_ascii_lowercase();
-    if h.contains("docker") || h.contains("podman") {
-        return Some(SuggestClassification {
-            class: "heavy".to_string(),
-            reason: "container workload detected".to_string(),
-            pattern_match: true,
-            memory_threshold_match: false,
-        });
-    }
-    if h.contains("code")
-        || h.contains("codium")
-        || h.contains("idea")
-        || h.contains("pycharm")
-        || h.contains("clion")
-    {
-        return Some(SuggestClassification {
-            class: "ide".to_string(),
-            reason: "IDE workload detected".to_string(),
-            pattern_match: true,
-            memory_threshold_match: false,
-        });
-    }
-
-    let gib = 1024_u64.pow(3);
-    if slice == "app.slice" && memory_current >= 2 * gib {
-        if h.contains("firefox")
-            || h.contains("chrome")
-            || h.contains("chromium")
-            || h.contains("brave")
-        {
-            return Some(SuggestClassification {
-                class: "browsers".to_string(),
-                reason: "high-memory app.slice browser process".to_string(),
-                pattern_match: true,
-                memory_threshold_match: true,
-            });
-        }
-        return Some(SuggestClassification {
-            class: "heavy".to_string(),
-            reason: "high-memory app.slice process".to_string(),
-            pattern_match: false,
-            memory_threshold_match: true,
-        });
-    }
-
-    None
+    policy_classify(
+        &ClassificationInput {
+            scope: unit.to_string(),
+            slice: slice.to_string(),
+            exec_start: exec_start.to_string(),
+            memory_current,
+        },
+        rules,
+    )
+    .map(|m: PolicyClassMatch| SuggestClassification {
+        class: m.class,
+        reason: m.reason,
+        pattern_match: m.pattern_match,
+        memory_threshold_match: m.memory_threshold_match,
+    })
 }
 
-fn canonical_app_identity(scope: &str, exec_start: &str) -> Option<String> {
-    let identity = discovery_parse_scope_identity(scope, exec_start);
-    identity
-        .snap_app
-        .or(identity.executable)
-        .map(|v| v.to_ascii_lowercase())
-}
-
-fn expected_class_for_known_app(app: &str) -> Option<&'static str> {
-    let app = app.to_ascii_lowercase();
-    if ["firefox", "chrome", "chromium", "brave", "opera", "vivaldi"].contains(&app.as_str()) {
-        return Some("browsers");
-    }
-    if ["code", "codium", "idea", "pycharm", "clion", "goland"].contains(&app.as_str()) {
-        return Some("ide");
-    }
-    if ["docker", "podman", "containerd"].contains(&app.as_str()) {
-        return Some("heavy");
-    }
-    None
-}
-
+#[cfg(test)]
 fn strong_app_identity_match(scope: &str, exec_start: &str, class: &str) -> bool {
-    let Some(app) = canonical_app_identity(scope, exec_start) else {
-        return false;
-    };
-    expected_class_for_known_app(&app).is_some_and(|expected| expected == class)
+    let identity = discovery_parse_scope_identity(scope, exec_start);
+    resguard_policy::strong_identity_match(&identity, class)
 }
 
 fn confidence_score(
+    identity: &AppIdentity,
+    class: &str,
     pattern_match: bool,
     memory_threshold_match: bool,
     known_desktop_id: bool,
-    strong_identity_match: bool,
 ) -> (u8, String) {
-    let mut score = 0u8;
-    let mut reasons = Vec::new();
-    if pattern_match {
-        score = score.saturating_add(40);
-        reasons.push("pattern");
-    }
-    if memory_threshold_match {
-        score = score.saturating_add(30);
-        reasons.push("memory");
-    }
-    if known_desktop_id {
-        score = score.saturating_add(30);
-        reasons.push("desktop-id");
-    }
-    if strong_identity_match {
-        score = score.saturating_add(30);
-        reasons.push("identity");
-    }
-    if reasons.is_empty() {
-        reasons.push("none");
-    }
-    (score.min(100), reasons.join("+"))
+    let scored = policy_score(
+        identity,
+        &ConfidenceSignals {
+            pattern_match,
+            memory_threshold_match,
+            known_desktop_id,
+            class: class.to_string(),
+        },
+    );
+    (scored.score, scored.reason)
 }
 
 fn resolve_suggest_profile(
@@ -3068,17 +2824,28 @@ mod tests {
 
     #[test]
     fn confidence_score_uses_all_signals() {
-        let (s1, r1) = confidence_score(true, true, true, true);
+        let id_firefox = AppIdentity {
+            executable: Some("firefox".to_string()),
+            snap_app: Some("firefox".to_string()),
+            desktop_id: None,
+        };
+        let id_unknown = AppIdentity {
+            executable: Some("unknown".to_string()),
+            snap_app: None,
+            desktop_id: None,
+        };
+
+        let (s1, r1) = confidence_score(&id_firefox, "browsers", true, true, true);
         assert_eq!(s1, 100);
         assert!(r1.contains("pattern"));
         assert!(r1.contains("memory"));
         assert!(r1.contains("desktop-id"));
         assert!(r1.contains("identity"));
 
-        let (s2, _) = confidence_score(true, false, true, false);
+        let (s2, _) = confidence_score(&id_unknown, "heavy", true, false, true);
         assert_eq!(s2, 70);
 
-        let (s3, _) = confidence_score(false, true, false, false);
+        let (s3, _) = confidence_score(&id_unknown, "heavy", false, true, false);
         assert_eq!(s3, 30);
     }
 
@@ -3099,7 +2866,12 @@ mod tests {
             &class.class,
         );
         assert!(strong);
-        let (score, reason) = confidence_score(class.pattern_match, false, false, strong);
+        let identity = discovery_parse_scope_identity(
+            "app-snap.firefox.firefox-1234.scope",
+            "/usr/bin/snap run firefox",
+        );
+        let (score, reason) =
+            confidence_score(&identity, &class.class, class.pattern_match, false, false);
         assert_eq!(score, 70);
         assert!(reason.contains("pattern"));
         assert!(reason.contains("identity"));
@@ -3122,7 +2894,12 @@ mod tests {
             &class.class,
         );
         assert!(strong);
-        let (score, _) = confidence_score(class.pattern_match, false, false, strong);
+        let identity = discovery_parse_scope_identity(
+            "app-snap.code.code-42.scope",
+            "/usr/bin/snap run code --new-window",
+        );
+        let (score, _) =
+            confidence_score(&identity, &class.class, class.pattern_match, false, false);
         assert_eq!(score, 70);
     }
 
@@ -3140,7 +2917,10 @@ mod tests {
         let strong =
             strong_app_identity_match("app-random.scope", "/usr/bin/unknown-browser", &class.class);
         assert!(!strong);
-        let (score, reason) = confidence_score(class.pattern_match, false, false, strong);
+        let identity =
+            discovery_parse_scope_identity("app-random.scope", "/usr/bin/unknown-browser");
+        let (score, reason) =
+            confidence_score(&identity, &class.class, class.pattern_match, false, false);
         assert_eq!(score, 40);
         assert!(reason.contains("pattern"));
         assert!(!reason.contains("identity"));

@@ -17,8 +17,8 @@ pub(crate) fn handle_suggest(req: SuggestRequest) -> Result<i32> {
             "invalid arguments: --apply and --dry-run cannot be combined"
         ));
     }
-    if confidence_threshold > 100 {
-        return Err(anyhow!("invalid --confidence-threshold: must be 0..=100"));
+    if let Err(msg) = policy_validate_confidence_threshold(confidence_threshold) {
+        return Err(anyhow!(msg));
     }
 
     println!("command=suggest");
@@ -79,13 +79,14 @@ pub(crate) fn handle_suggest(req: SuggestRequest) -> Result<i32> {
             continue;
         };
 
+        let identity = discovery_parse_scope_identity(&scope, &exec_start);
         let desktop_id = unique_desktop_id_for_scope_exec(&scope, &exec_start, &desktop_by_exec);
-        let strong_identity = strong_app_identity_match(&scope, &exec_start, &classified.class);
         let (confidence, confidence_reason) = confidence_score(
+            &identity,
+            &classified.class,
             classified.pattern_match,
             classified.memory_threshold_match,
             desktop_id.is_some(),
-            strong_identity,
         );
 
         suggestions.push(Suggestion {
@@ -131,7 +132,7 @@ pub(crate) fn handle_suggest(req: SuggestRequest) -> Result<i32> {
             println!("apply_results");
         }
         for s in &suggestions {
-            if s.confidence < confidence_threshold {
+            if !policy_meets_confidence_threshold(s.confidence, confidence_threshold) {
                 println!(
                     "skip\t{}\t{}\tconfidence {} below threshold {} ({})",
                     s.scope, s.class, s.confidence, confidence_threshold, s.confidence_reason

@@ -1,339 +1,182 @@
-## Codex Prompt B — Profile schema v1 + YAML load/save + validation helpers
-
-**Ziel:** `resguard-core` enthält Profile structs; `resguard-config` kann Profile aus Store laden/speichern; `validate` prüft sanity.
-
-**Aufgaben**
-
-1. Implementiere Profile structs passend zu `docs/design.md` (nur v0.1 Felder nötig: memory/cpu/oomd/classes).
-2. Implementiere `parse_size("12G") -> u64 bytes` + `parse_cpuset("1-7,9") -> Vec<u32>` (sanity).
-3. Implementiere `validate_profile(&Profile) -> Vec<ValidationError>`.
-
-**Code-Snippet: size parsing (minimal, robust)**
-
-```rust
-pub fn parse_size_to_bytes(s: &str) -> Result<u64, String> {
-    let s = s.trim();
-    if s.is_empty() { return Err("empty size".into()); }
-    let (num, unit) = s.split_at(s.len().saturating_sub(1));
-    let (n_str, u_str) = if unit.chars().all(|c| c.is_ascii_alphabetic()) {
-        (num.trim(), unit.trim())
-    } else {
-        (s, "")
-    };
-    let n: u64 = n_str.parse().map_err(|_| format!("invalid number: {n_str}"))?;
-    let mult: u64 = match u_str.to_ascii_uppercase().as_str() {
-        "" => 1,
-        "K" => 1024,
-        "M" => 1024_u64.pow(2),
-        "G" => 1024_u64.pow(3),
-        "T" => 1024_u64.pow(4),
-        _ => return Err(format!("invalid unit: {u_str}")),
-    };
-    n.checked_mul(mult).ok_or_else(|| "size overflow".into())
-}
-```
-
-**Code-Snippet: validation sanity**
-
-```rust
-pub fn validate_memory(high: Option<&str>, max: Option<&str>) -> Result<(), String> {
-    if let (Some(h), Some(m)) = (high, max) {
-        let hb = parse_size_to_bytes(h)?;
-        let mb = parse_size_to_bytes(m)?;
-        if mb < hb {
-            return Err(format!("MemoryMax ({m}) must be >= MemoryHigh ({h})"));
-        }
-    }
-    Ok(())
-}
-```
-
-**Acceptance**
-
-* `resguard profile validate <file>` liefert klare Fehler
-* Unit tests für parse_size + sanity
-
----
-
-## Codex Prompt C — `resguard init` (auto profile detect + write)
-
-**Ziel:** `resguard init` liest Hardware (RAM/CPU) und erzeugt Profile YAML. Root schreibt ins Store, non-root in CWD. Optional `--apply`.
-
-**Aufgaben**
-
-1. `resguard-system`: `read_mem_total_bytes()` aus `/proc/meminfo` (MemTotal)
-2. CPU count über `std::thread::available_parallelism()`
-3. Implementiere Heuristiken (16G→2G reserve etc.)
-4. YAML generieren und speichern:
-
-   * root: `${config_dir}/profiles/<name>.yml`
-   * non-root: `./<name>.yml` (oder `--out`)
-5. `--dry-run`: nur YAML ausgeben
-6. `--apply`: ruft intern apply auf (kein shell)
-
-**Code-Snippet: /proc/meminfo parsing**
-
-```rust
-pub fn mem_total_bytes() -> anyhow::Result<u64> {
-    let content = std::fs::read_to_string("/proc/meminfo")?;
-    for line in content.lines() {
-        if let Some(rest) = line.strip_prefix("MemTotal:") {
-            // e.g. "       16327156 kB"
-            let parts: Vec<&str> = rest.split_whitespace().collect();
-            let kb: u64 = parts.get(0).ok_or_else(|| anyhow::anyhow!("MemTotal parse"))?.parse()?;
-            return Ok(kb * 1024);
-        }
-    }
-    Err(anyhow::anyhow!("MemTotal not found"))
-}
-```
-
-**Code-Snippet: reserve heuristic**
-
-```rust
-pub fn default_reserve_bytes(total: u64) -> u64 {
-    let gb = 1024_u64.pow(3);
-    match total / gb {
-        0..=9  => 1 * gb,
-        10..=19 => 2 * gb,
-        20..=39 => 4 * gb,
-        _ => 6 * gb,
-    }
-}
-```
+Prompt A — Snap/Firefox Feldtest-Erkenntnisse in konkrete Fixes übersetzen
+
+• Implemented a minimal hardening fix for Firefox Snap wrap flow and validated it with tests.
+
+  ### What I changed
+
+  - Firefox Snap alias resolution made practical and deterministic:
+      - firefox.desktop can resolve to firefox_firefox.desktop via snap alias path.
+      - Duplicate alias hits across scan dirs are deduplicated by desktop ID (prefers user-origin entry).
+      - File: main.rs
+  - Wrapper launch behavior hardened for desktop environments:
+      - Wrapped desktop entries now force DBusActivatable=false when source has that key, so launcher uses wrapper Exec=....
+      - File: main.rs
+      - Wrap command messaging updated accordingly.
+      - File: desktop.rs
+  - Tests added/updated for real-case behavior:
+      - Firefox snap alias case (firefox.desktop -> firefox_firefox.desktop)
+      - Wrapper enforces DBusActivatable=false
+      - Existing snap ambiguity and mapping tests still pass
+      - File: main.rs
+  - User-facing docs updated for behavior change:
+      - Added note that wrapper forces DBusActivatable=false for such sources.
+      - File: cli.md
+  - Field-test docs updated from vague gap to precise status:
+      - Snap Firefox flow now marked as implemented in CLI, with explicit “live re-run pending” limitation.
+      - Files:
+          - 2026-03-08-ubuntu24.04-first-field.md
+          - e2e_matrix.md
 
-**Acceptance**
+  ### Validation
 
-* `resguard init --dry-run` prints valid YAML
-* `sudo resguard init --apply` creates profile in `/etc/resguard/profiles/` and applies it
+  - Ran cargo test: all tests passed.
 
----
-
-## Codex Prompt D — Planner + Apply (system drop-ins + class slices system+user) + `--root`
-
-**Ziel:** `apply` schreibt genau die resguard-managed files unter `--root`, erstellt dirs, schreibt content, macht system daemon-reload, optional best-effort user daemon-reload.
-
-**Aufgaben**
-
-1. Implementiere Plan-Actions:
-
-   * EnsureDir, WriteFile, Exec (systemctl/systemd-run)
-2. Apply schreibt:
-
-   * `${root}/etc/systemd/system/system.slice.d/50-resguard.conf`
-   * `${root}/etc/systemd/system/user.slice.d/50-resguard.conf`
-   * `${root}/etc/systemd/system/resguard-<class>.slice`
-   * `${root}/etc/systemd/user/resguard-<class>.slice`
-3. Bei `--dry-run`: keine Writes, nur plan anzeigen
-4. Nach Writes:
-
-   * `systemctl daemon-reload` **nur wenn root=="/"** (bei Tests skip)
-5. `--user-daemon-reload`: best-effort `sudo -u $SUDO_USER systemctl --user daemon-reload` (nur wenn möglich)
-
-**Code-Snippet: write file with parent dir**
-
-```rust
-pub fn write_file(path: &std::path::Path, content: &str) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(path, content)?;
-    Ok(())
-}
-```
-
-**Code-Snippet: systemd drop-in render**
-
-```rust
-pub fn render_user_slice_dropin(memory_high: Option<&str>, memory_max: Option<&str>, allowed_cpus: Option<&str>) -> String {
-    let mut s = String::new();
-    s.push_str("# Managed by resguard. DO NOT EDIT.\n[Slice]\n");
-    if let Some(v) = memory_high { s.push_str(&format!("MemoryHigh={v}\n")); }
-    if let Some(v) = memory_max { s.push_str(&format!("MemoryMax={v}\n")); }
-    if let Some(v) = allowed_cpus { s.push_str(&format!("AllowedCPUs={v}\n")); }
-    s
-}
-```
-
-**Acceptance**
-
-* `resguard apply <profile> --dry-run` shows which files would be written
-* `resguard apply <profile> --root /tmp/rgtest` writes only under /tmp/rgtest and does NOT call systemctl
-
----
-
-## Codex Prompt E — State + Backups + Rollback (transactional best-effort)
-
-**Ziel:** Jede Apply-Operation macht Backups, schreibt state.json, Rollback stellt wieder her.
-
-**Aufgaben**
-
-1. Implementiere Backup dir: `${state_dir}/backups/<timestamp>/...`
-2. Vor jedem Write:
-
-   * falls target exists: copy into backup (same relative path)
-   * falls nicht exists: mark as “created”
-3. state.json speichert:
-
-   * active profile
-   * backup id (timestamp)
-   * managed paths list
-   * created paths list
-4. Apply Fehler → automatisch rollback attempt
-5. Rollback:
-
-   * restore backed-up files
-   * delete created files
-   * systemctl daemon-reload (nur root=="/")
-
-**Code-Snippet: backup path mapping**
-
-```rust
-pub fn backup_path(backup_root: &std::path::Path, target: &std::path::Path, root: &std::path::Path) -> anyhow::Result<std::path::PathBuf> {
-    let rel = target.strip_prefix(root).unwrap_or(target);
-    Ok(backup_root.join(rel))
-}
-```
-
-**Acceptance**
-
-* Integration test: apply → modify generated file → rollback restores original
-* apply failure triggers rollback attempt
-
----
-
-## Codex Prompt F — `run --class` echte Ausführung (user vs system mode) + `--wait`
-
-**Ziel:** `run` nutzt `systemd-run` korrekt, ohne shell, und wählt automatisch `--user` wenn nicht root.
-
-**Aufgaben**
-
-1. Slice Resolution:
-
-   * aus active profile (state.json) oder `--profile`
-   * `--slice` override
-2. Mode:
-
-   * euid==0 → system
-   * else → user
-3. Existence check:
-
-   * user: `systemctl --user cat <slice>` (best-effort; wenn fail → trotzdem run? v0.1: fail hard mit Hinweis “apply first”)
-4. Exec:
-
-   * user: `systemd-run --user --scope -p Slice=<slice> -- <cmd...>`
-   * system: `systemd-run --scope -p Slice=<slice> -- <cmd...>`
-5. `--wait`:
-
-   * add `--wait` to systemd-run and forward exit code
-
-**Code-Snippet: exec systemd-run**
-
-```rust
-use std::process::Command;
-
-pub fn systemd_run(user: bool, slice: &str, wait: bool, cmd: &[String]) -> anyhow::Result<i32> {
-    let mut c = Command::new("systemd-run");
-    if user { c.arg("--user"); }
-    c.arg("--scope");
-    if wait { c.arg("--wait"); }
-    c.arg("-p").arg(format!("Slice={slice}"));
-    c.arg("--");
-    for a in cmd { c.arg(a); }
-    let status = c.status()?;
-    Ok(status.code().unwrap_or(1))
-}
-```
-
-**Acceptance**
-
-* `resguard run --class browsers -- echo hi` starts successfully
-* `resguard run --class browsers --wait -- false` returns non-zero
-
----
-
-## Codex Prompt G — `status` minimal nützlich (system + best-effort user)
-
-**Ziel:** `status` zeigt active profile, system slice props, class slices props, oomd active, PSI summary.
-
-**Aufgaben**
-
-1. state.json lesen: active profile + class slices list
-2. `systemctl show user.slice system.slice` parse key props:
-
-   * MemoryHigh, MemoryMax, MemoryLow, AllowedCPUs
-3. best-effort user:
-
-   * `systemctl --user show resguard-browsers.slice` (wenn fail: warn)
-4. PSI summary:
-
-   * parse `/proc/pressure/memory` and `/proc/pressure/cpu` (nur 1-min avg)
-5. Ausgabe als table-like text ok
-
-**Code-Snippet: PSI parse (tiny)**
-
-```rust
-pub fn read_pressure_1min(path: &str) -> anyhow::Result<Option<f64>> {
-    let s = std::fs::read_to_string(path)?;
-    // line: "some avg10=0.00 avg60=0.00 avg300=0.00 total=0"
-    for line in s.lines() {
-        if line.starts_with("some ") {
-            for tok in line.split_whitespace() {
-                if let Some(v) = tok.strip_prefix("avg60=") {
-                    return Ok(Some(v.parse()?));
-                }
-            }
-        }
-    }
-    Ok(None)
-}
-```
-
-**Acceptance**
-
-* `resguard status` works without root
-* If `systemctl show` fails, prints best-effort diagnostics and exits 1 (per spec)
-
----
-
-## Codex Prompt H — CI + Quality gates (fmt, clippy, test) + minimal changelog
-
-**Ziel:** Stabiler Dev-Loop.
-
-**Aufgaben**
-
-1. Add GitHub Actions: build/test/fmt/clippy
-2. Ensure `cargo fmt` clean
-3. Add `CHANGELOG.md` initial entry v0.1.0 (unreleased)
-
-**Acceptance**
-
-* CI green on push
-
----
-
-# Bonus: “Agent Loop” Meta-Prompt (für Codex Autopilot)
-
-Wenn du willst, dass Codex in kleinen PRs arbeitet:
-
-```text
-You are working in the resguard repository. Follow AGENTS.md strictly.
-Implement milestone v0.1 in small, deterministic commits. Each commit must:
-- compile (cargo build)
-- include tests where applicable
-- update docs if behavior changes
-
-Work in this order:
-1) Profile schema + validation (core/config)
-2) init command (detect + generate)
-3) apply/dry-run with --root support + system and user slice generation
-4) state+backup+rollback
-5) run --class (user/system mode) + --wait
-6) status minimal
-
-Never use shell invocation. Use std::process::Command with args.
-Never write outside paths under --root. All writes must be backup-protected.
-Prefer explicit errors and clear user-facing messages.
-```
-
----
+  ### Note
+
+  - There is an untracked file present: tests/e2e/results/test-log.txt (left untouched).
+
+  Suggested commit message:
+  fix(desktop): harden snap firefox wrapper flow based on ubuntu field results
+
+dev@getac:~/resguard$ git status
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+        modified:   crates/resguard-cli/src/commands/desktop.rs
+        modified:   crates/resguard-cli/src/main.rs
+        modified:   docs/cli.md
+        modified:   tests/e2e/e2e_matrix.md
+        modified:   tests/e2e/results/2026-03-08-ubuntu24.04-first-field.md
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+        tests/e2e/results/test-log.txt
+
+no changes added to commit (use "git add" and/or "git commit -a")
+dev@getac:~/resguard$ git add .
+dev@getac:~/resguard$ git commit -m "fix(desktop): harden snap firefox wrapper flow based on ubuntu field results"
+[main 0d57d6b] fix(desktop): harden snap firefox wrapper flow based on ubuntu field results
+ 6 files changed, 371 insertions(+), 9 deletions(-)
+ create mode 100644 tests/e2e/results/test-log.txt
+
+
+Prompt B — Confidence-Scoring für Suggest auf echten Ubuntu-Daten nachschärfen
+
+• Implemented confidence tuning for common Ubuntu snap desktop apps with low-risk guardrails.
+
+  ### What changed
+
+  - Added a new confidence signal: identity
+      - Derived from strong app identity in scope/exec (snap.* scope, snap run <app>, or executable token).
+      - Only applies when app identity matches a known app-to-class mapping:
+          - firefox/chrome/... -> browsers
+          - code/codium/idea/... -> ide
+          - docker/podman/containerd -> heavy
+  - Updated scoring:
+      - pattern = +40
+      - memory = +30
+      - desktop-id = +30
+      - identity = +30
+      - capped at 100
+
+  This makes common snap Firefox/Code cases move from 40 to 70 (pattern + identity), so they pass the default threshold while weak matches remain low.
+
+  ### Files changed
+
+  - suggest.rs
+  - main.rs
+  - v0.3.0-checklist.md
+
+  ### Tests added/updated
+
+  - Snap Firefox confidence boost to 70
+  - Snap Code confidence boost to 70
+  - Weak/ambiguous case remains low (40)
+  - Existing confidence tests updated for new signal
+
+  All tests pass with cargo test.
+
+  Suggested commit message:
+  feat(suggest): tune confidence scoring for common ubuntu snap desktop applications
+
+dev@getac:~/resguard$ git status
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+        modified:   crates/resguard-cli/src/commands/suggest.rs
+        modified:   crates/resguard-cli/src/main.rs
+        modified:   docs/releases/v0.3.0-checklist.md
+
+no changes added to commit (use "git add" and/or "git commit -a")
+dev@getac:~/resguard$ git add .
+dev@getac:~/resguard$ git commit -m "feat(suggest): tune confidence scoring for common ubuntu snap desktop applications"
+[main 9364f1d] feat(suggest): tune confidence scoring for common ubuntu snap desktop applications
+ 3 files changed, 107 insertions(+), 4 deletions(-)
+
+
+Prompt C — Zweiten Feldtestlauf besser vorbereiten
+
+
+• Implemented. The next field run now captures comparable GNOME/KDE data with minimal manual parsing.
+
+  ### What changed
+
+  - Added structured capture output in run_e2e.sh:
+      - install_method (--install-method apt|release-asset|other)
+      - session/desktop capture via CAPTURE desktop_environment=..., CAPTURE session_type=...
+      - targeted snap checks:
+          - desktop list --filter firefox + alias wrap probe firefox.desktop
+          - desktop list --filter code + alias wrap probe code.desktop
+      - non-snap check:
+          - discovers first non-snap desktop entry and tests wrap dry-run
+      - suggest capture:
+          - dry-run status
+          - total suggestions
+          - count >= threshold
+          - per-scope confidence hints for firefox/code if present
+      - suggest apply outcome:
+          - suggest --apply status (enabled by default, disable via --no-suggest-apply)
+          - counts of ok/warn/skip/hint lines
+  - New concise operator runbook: RUNBOOK.md
+      - one practical command for repeatable runs
+      - explains exactly which CAPTURE keys to compare
+  - Updated matrix format and guidance: e2e_matrix.md
+      - added Install column
+      - execution examples now include --install-method
+      - coverage section now includes snap/non-snap and suggest apply capture
+      - pass criteria now requires capture keys
+
+  ### Validation done
+
+  - bash -n tests/e2e/run_e2e.sh passes
+  - tests/e2e/run_e2e.sh --help shows new options correctly
+
+  Suggested commit message:
+  docs(e2e): improve field test capture for snap and desktop wrapper validation
+
+dev@getac:~/resguard$ git status
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+        modified:   tests/e2e/e2e_matrix.md
+        modified:   tests/e2e/run_e2e.sh
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+        tests/e2e/RUNBOOK.md
+
+no changes added to commit (use "git add" and/or "git commit -a")
+dev@getac:~/resguard$ git add .
+dev@getac:~/resguard$ git commit -m "docs(e2e): improve field test capture for snap and desktop wrapper validation"
+[main c7883c5] docs(e2e): improve field test capture for snap and desktop wrapper validation
+ 3 files changed, 224 insertions(+), 18 deletions(-)
+ create mode 100644 tests/e2e/RUNBOOK.md

@@ -1,489 +1,697 @@
 
 # AGENTS.md
 
-Guidelines for human and AI agents contributing to the **Resguard** project.
+Guidelines for AI coding agents (Codex, OpenHands, Claude Code, etc.) working on the **Resguard** repository.
 
-Resguard is a **native Linux system tool** written in Rust that manages
-system resource isolation using **systemd slices and cgroups v2**.
+This file defines:
 
-The project prioritizes:
+- architectural boundaries
+- crate responsibilities
+- coding workflow rules
+- migration strategy
 
-- system stability
-- predictable behavior
-- safe system modification
-- reproducible builds
-- minimal dependencies
-
-Agents working on this repository must follow the guidelines below.
+Agents MUST follow this document when generating code or refactoring.
 
 ---
 
-# Project Purpose
+# Project Vision
 
-Resguard ensures that Linux systems remain responsive even under extreme
-CPU and memory pressure.
+Resguard is a **Linux resource policy engine for desktop systems** built on:
 
-It accomplishes this by:
+- systemd slices
+- cgroups v2
+- PSI (pressure metrics)
+- systemd-oomd
 
-- reserving resources for the operating system
-- limiting user workloads
-- isolating workloads in dedicated systemd slices
-- allowing controlled process launching via `resguard run`
+The goal is to provide:
 
-Resguard is designed to function **agentless by default**, relying on systemd
-as the permanent enforcement layer.
+- automatic resource control
+- desktop application classification
+- system responsiveness guarantees
+
+Resguard is **not a process manager** and **not a container runtime**.
+
+It is a **policy layer above systemd**.
 
 ---
 
-# Architecture Overview
+# Core Architectural Principle
 
-Resguard is implemented as a Rust workspace.
+Resguard is organized into **strictly separated layers**.
+
+Agents MUST preserve this separation.
 
 ```
 
-resguard/
+CLI / Daemon / Interfaces
+↓
+Application Services
+↓
+Policy Engine
+↓
+Discovery Layer
+↓
+Runtime / Execution Backend
+↓
+Linux / systemd / kernel
+
+```
+
+No layer may bypass another.
+
+---
+
+# Crate Architecture
+
+The workspace contains the following crates.
+
+```
+
 crates/
-resguard-cli
-resguard-core
-resguard-system
-resguard-config
-resguard-state
+resguard-model/
+resguard-policy/
+resguard-discovery/
+resguard-runtime/
+resguard-config/
+resguard-services/
+resguard-cli/
+resguard-daemon/
 
 ```
 
-### Crate responsibilities
+Each crate has **clear responsibilities**.
 
-| crate | responsibility |
-|------|---------------|
-resguard-cli | CLI interface and command dispatch
-resguard-core | profile schema, validation, planner, diff engine
-resguard-system | systemd interaction and Linux adapters
-resguard-config | profile storage and loading
-resguard-state | state tracking, backups, rollback
+Agents MUST NOT mix responsibilities across crates.
 
 ---
 
-# Key Concepts
+# resguard-model
 
-## Agentless Enforcement
+Purpose: shared domain types.
 
-Resguard does **not run continuously**.
+Contains:
 
-Instead:
-
-1. `resguard apply` writes systemd configuration
-2. systemd enforces the limits permanently
-
-This ensures:
-
-- reliability
-- low overhead
-- minimal attack surface
-
----
-
-## Workload Classes
-
-Applications may run in slices such as:
-
-```
-
-resguard-browsers.slice
-resguard-ide.slice
-resguard-heavy.slice
-
-```
-
-Processes are placed into slices using:
-
-```
-
-resguard run --class <class>
-
-```
-
-This uses transient scopes via `systemd-run`.
-
----
-
-# System Integration
-
-Resguard writes systemd configuration files to:
-
-```
-
-/etc/systemd/system/
-/etc/systemd/user/
-
-```
+- profile structures
+- policy models
+- suggestion types
+- metrics snapshots
+- action plans
+- identity types
 
 Examples:
 
 ```
 
-/etc/systemd/system/system.slice.d/50-resguard.conf
-/etc/systemd/system/user.slice.d/50-resguard.conf
-/etc/systemd/system/resguard-browsers.slice
-/etc/systemd/user/resguard-browsers.slice
+Profile
+ClassSpec
+Suggestion
+AppIdentity
+PressureSnapshot
+MetricsSnapshot
+ActionPlan
 
 ```
 
-These files are always marked:
+Rules:
+
+- no system calls
+- no CLI logic
+- no filesystem assumptions
+- pure data structures
+
+Dependencies allowed:
 
 ```
 
-# Managed by resguard. DO NOT EDIT.
+serde
+thiserror
+small utility crates
 
 ```
 
-Agents must **never modify unrelated system files**.
-
 ---
 
-# Documentation Map
+# resguard-policy
 
-Agents must consult documentation before implementing features.
+Purpose: decision logic.
 
-| Document | Description |
-|--------|-------------|
-docs/design.md | system architecture and design decisions
-docs/cli.md | CLI specification
-docs/profiles.md | profile schema and examples
-docs/safety.md | rollback, safety model
-docs/issues-roadmap.md | roadmap and milestones
+Contains:
 
----
+- classification rules
+- confidence scoring
+- default profiles
+- autopilot decision engine
+- threshold logic
 
-# Development Principles
-
-## Safety First
-
-System stability is more important than feature completeness.
-
-All changes must:
-
-- support dry-run
-- support rollback
-- avoid destructive writes
-
----
-
-## Idempotent Operations
-
-Running the same command twice must not change the system state.
-
-Example:
+Examples:
 
 ```
 
-resguard apply profile
-resguard apply profile
+classify(identity) -> ClassMatch
+
+score(identity, signals) -> ConfidenceScore
+
+build_auto_profile(system_snapshot)
+
+decide_pressure_actions(snapshot, state, profile)
 
 ```
 
-must produce identical results.
+Rules:
+
+Policy layer MUST NOT:
+
+- call systemctl
+- read /proc
+- access desktop files
+- access filesystem paths
+- parse snap paths
+
+Policy only consumes data structures from `resguard-model`.
 
 ---
 
-## Explicit System Changes
+# resguard-discovery
 
-Never perform hidden system modifications.
+Purpose: detect applications and identities.
 
-Every change must be:
+Handles:
 
-- visible in `diff`
-- reversible via `rollback`
+- XDG desktop discovery
+- Snap desktop files
+- Flatpak detection (future)
+- systemd scope parsing
+- Exec command parsing
+- desktop-id resolution
+- alias resolution
+
+Examples:
+
+```
+
+scan_desktop_entries()
+
+resolve_desktop_id("firefox.desktop")
+
+parse_scope_identity(scope_name)
+
+build_exec_index()
+
+```
+
+Discovery returns **AppIdentity** objects.
+
+Discovery MUST NOT:
+
+- classify apps
+- assign resource classes
+- apply slices
+- modify system configuration
 
 ---
 
-# Rust Coding Guidelines
+# resguard-runtime
 
-## General Rules
+Purpose: Linux execution backend.
 
-- Use **stable Rust only**
-- Prefer **explicit types**
-- Avoid unnecessary abstractions
-- Favor readability over cleverness
+Handles:
+
+- systemd interactions
+- slice creation
+- set-property operations
+- systemd-run
+- PSI reading
+- /proc parsing
+- memory statistics
+- action plan execution
+- rollback operations
+
+Examples:
+
+```
+
+read_pressure()
+
+read_system_snapshot()
+
+plan_apply(profile)
+
+execute_plan(plan)
+
+run_in_slice(slice, command)
+
+set_slice_limits(slice)
+
+```
+
+Runtime MUST NOT:
+
+- decide resource classes
+- run policy decisions
+- parse desktop entries
+- run CLI logic
+
+---
+
+# resguard-config
+
+Purpose: configuration and persistence.
+
+Handles:
+
+- profile loading
+- YAML parsing
+- desktop mapping storage
+- daemon configuration
+- state persistence
+
+Examples:
+
+```
+
+load_profile()
+save_profile()
+load_desktop_mapping()
+store_state()
+
+```
+
+---
+
+# resguard-services
+
+Purpose: application use-cases.
+
+This crate orchestrates interactions between:
+
+- discovery
+- policy
+- runtime
+- config
+
+Examples:
+
+```
+
+SetupService
+SuggestService
+DesktopService
+DoctorService
+MetricsService
+PanicService
+RescueService
+DaemonService
+
+```
+
+Services implement workflows like:
+
+```
+
+setup
+suggest
+desktop wrap
+apply
+panic
+rescue
+
+```
+
+Rules:
+
+Services may call:
+
+```
+
+policy
+runtime
+discovery
+config
+
+```
+
+Services must not contain:
+
+- CLI code
+- systemctl invocations
+- direct filesystem logic
+
+Those belong to runtime/config.
+
+---
+
+# resguard-cli
+
+Purpose: command line interface.
+
+Handles:
+
+- clap definitions
+- argument parsing
+- service invocation
+- output rendering
+
+Examples:
+
+```
+
+resguard setup
+resguard suggest
+resguard desktop wrap
+resguard doctor
+resguard metrics
+resguard panic
+resguard rescue
+
+```
+
+Rules:
+
+CLI MUST NOT implement business logic.
+
+CLI calls services.
+
+---
+
+# resguard-daemon
+
+Purpose: background autopilot process.
+
+Responsibilities:
+
+- event loop
+- pressure monitoring
+- autopilot execution
+- signal handling
+- daemon logging
+
+Daemon MUST call `DaemonService`.
+
+Daemon MUST NOT reimplement policy logic.
+
+---
+
+# Dependency Rules
+
+Allowed dependency direction:
+
+```
+
+model
+↑
+policy
+↑
+discovery
+↑
+runtime
+↑
+services
+↑
+cli / daemon
+
+```
+
+Forbidden:
+
+```
+
+policy -> runtime
+policy -> discovery
+
+runtime -> cli
+runtime -> services
+
+discovery -> runtime
+
+```
+
+Agents MUST respect this architecture.
+
+---
+
+# Code Style Rules
+
+Agents MUST follow these coding rules.
+
+## Small PRs
+
+Preferred PR size:
+
+```
+
+50–400 lines
+
+```
+
+Avoid large refactors in one commit.
+
+---
+
+## Deterministic Logic
+
+Avoid hidden behavior.
+
+Prefer explicit flows:
+
+```
+
+observe -> decide -> act
+
+```
+
+---
+
+## Avoid Global State
+
+Use explicit dependency passing.
 
 ---
 
 ## Error Handling
 
-Use structured error handling.
+Use structured errors.
 
-Preferred pattern:
-
-```
-
-anyhow::Result<T>
-
-```
-
-For libraries:
+Preferred crates:
 
 ```
 
 thiserror
-
-```
-
-Never panic for recoverable errors.
-
----
-
-## Logging
-
-Logging must be minimal and structured.
-
-Use verbosity flags:
-
-```
-
---verbose
---quiet
-
-```
-
-Do not print secrets or environment dumps.
-
----
-
-## CLI Design
-
-CLI must follow the spec in:
-
-```
-
-docs/cli.md
-
-```
-
-Use:
-
-```
-
-clap
-
-```
-
-for argument parsing.
-
----
-
-## File Writing
-
-All file writes must follow this pattern:
-
-1. validate input
-2. create backup
-3. write file
-4. reload systemd
-5. update state
-
-Never write directly without backup.
-
----
-
-# System Command Execution
-
-External commands include:
-
-```
-
-systemctl
-systemd-run
-
-```
-
-Agents must execute commands using **direct exec**, never shell strings.
-
-Example (Rust):
-
-```
-
-Command::new("systemctl")
-.arg("daemon-reload")
-.status()?;
-
-```
-
-Never use:
-
-```
-
-sh -c
-bash -c
+anyhow (for CLI only)
 
 ```
 
 ---
 
-# Security Requirements
+# Testing Strategy
 
-Resguard interacts with privileged system components.
+Each layer must have its own tests.
 
-Security rules:
-
-- no command injection
-- no path traversal
-- validate all profile inputs
-- never overwrite unknown files
-
-See:
+### policy tests
 
 ```
 
-SECURITY.md
+classification
+confidence scoring
+autopilot decisions
+
+```
+
+### discovery tests
+
+```
+
+snap parsing
+desktop alias resolution
+exec token parsing
+
+```
+
+### runtime tests
+
+```
+
+slice planning
+systemd command generation
+rollback planning
+
+```
+
+### service tests
+
+```
+
+suggest workflow
+desktop wrap workflow
+setup workflow
+
+```
+
+CLI tests should only validate argument parsing.
+
+---
+
+# Migration Strategy
+
+The project is currently transitioning toward this architecture.
+
+Migration phases:
+
+### Phase 1
+
+Introduce `resguard-model`.
+
+Move shared types there.
+
+---
+
+### Phase 2
+
+Introduce `resguard-discovery`.
+
+Move:
+
+- XDG scanning
+- Snap detection
+- desktop-id resolution
+- scope parsing
+
+out of CLI.
+
+---
+
+### Phase 3
+
+Introduce `resguard-policy`.
+
+Move:
+
+- classification
+- confidence scoring
+- autoprofile logic
+
+out of CLI.
+
+---
+
+### Phase 4
+
+Introduce `resguard-services`.
+
+Move workflows:
+
+- setup
+- suggest
+- desktop wrap
+
+into services.
+
+---
+
+### Phase 5
+
+Stabilize `resguard-runtime`.
+
+Centralize systemd interaction.
+
+---
+
+### Phase 6
+
+Refactor daemon to use services.
+
+---
+
+# Agent Workflow
+
+When implementing features, agents MUST:
+
+1. Identify the correct layer.
+2. Add logic to that crate.
+3. Expose minimal API upward.
+4. Write tests in that crate.
+5. Update CLI only to call services.
+
+---
+
+# Feature Development Guidance
+
+Typical implementation path:
+
+### Example: Improve Suggest
+
+1. discovery → improve identity detection
+2. policy → update classification rules
+3. services → update SuggestService
+4. CLI → adjust output
+
+Never implement all logic in CLI.
+
+---
+
+# Autopilot Design
+
+Future autopilot logic must follow:
+
+```
+
+observe (runtime)
+→ decide (policy)
+→ execute (runtime)
+
+```
+
+Autopilot MUST NOT embed policy rules directly.
+
+---
+
+# Security Principles
+
+Resguard modifies system resource limits.
+
+Agents MUST ensure:
+
+- safe path handling
+- no arbitrary file writes
+- no shell injection
+- explicit unit file paths
+- correct systemd reload behavior
+
+---
+
+# Non-Goals
+
+Resguard will NOT become:
+
+- a container runtime
+- a full process manager
+- a scheduler
+- a GUI-heavy desktop tool
+
+Focus remains:
+
+```
+
+desktop resource policy
 
 ```
 
 ---
 
-# Testing Requirements
+# Summary
 
-All new functionality must include tests.
-
-Required test types:
-
-### Unit Tests
-
-- profile parsing
-- validation logic
-- planner output
-
-### Snapshot Tests
-
-Planner diff results.
-
-### Integration Tests
-
-Using fake root directory:
+Resguard architecture is based on:
 
 ```
 
-resguard --root /tmp/test
+Model
+Policy
+Discovery
+Runtime
+Services
+Interfaces
 
 ```
 
-Ensure:
+Agents MUST maintain strict separation between these layers.
 
-- correct file generation
-- rollback restores state
-
----
-
-# Code Style
-
-Follow Rust conventions:
-
-```
-
-cargo fmt
-cargo clippy
-
-```
-
-Must pass before committing.
-
----
-
-# Commit Guidelines
-
-Commits must follow conventional commit style.
-
-Examples:
-
-```
-
-feat(cli): add init command
-fix(systemd): correct slice generation
-refactor(core): simplify planner logic
-docs: update profile documentation
-
-```
-
----
-
-# Dependency Policy
-
-Dependencies must remain minimal.
-
-Allowed categories:
-
-- CLI parsing
-- serialization
-- error handling
-
-Avoid large frameworks.
-
----
-
-# Future Architecture
-
-Resguard will evolve in phases.
-
-### v0.1
-Agentless system manager integration.
-
-### v0.2
-Desktop wrapper generation.
-
-### v0.3
-Optional `resguardd` event daemon.
-
-Agents must **not implement v0.2/v0.3 features prematurely**.
-
-Follow roadmap:
-
-```
-
-docs/issues-roadmap.md
-
-```
-
----
-
-# AI Agent Rules
-
-Agents must:
-
-1. read project documentation first
-2. respect architecture boundaries
-3. never introduce unsafe system modifications
-4. maintain backward compatibility
-5. prefer small incremental changes
-
-Agents must not:
-
-- introduce background daemons without design approval
-- modify system paths outside Resguard scope
-- break rollback guarantees
-
----
-
-# Contribution Workflow
-
-Typical development flow:
-
-```
-
-cargo build
-cargo test
-cargo fmt
-cargo clippy
-
-```
-
-Before submitting changes.
-
----
-
-# Project Philosophy
-
-Resguard follows the Unix philosophy:
-
-- small
-- predictable
-- transparent
-
-System behavior must always be understandable and reversible.
+All new features must respect this structure.

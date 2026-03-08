@@ -273,3 +273,15 @@ Verhalten:
 - wenn nicht gefunden: versucht sichere Alias-Auflösung für häufige Snap-Namen (z. B. Anfrage `firefox.desktop` -> `firefox_firefox.desktop`) nur bei eindeutiger Zuordnung
 - bei mehreren Treffern: Fehler mit Kandidatenliste (kein unsicheres Rateverhalten)
 - wenn die Quelle `DBusActivatable=true` hat, setzt der Wrapper explizit `DBusActivatable=false`, damit Launcher `Exec=` des Wrappers verwenden
+
+---
+
+## `resguard desktop doctor`
+Verhalten:
+
+- prüft Wrapper-Dateien aus dem Desktop-Mapping auf Existenz und parsebare `Exec=`-Wrapper
+- prüft, ob `resguard-<class>.slice` im User-Daemon sichtbar ist
+- gibt bei potenziell veralteten Launcher-Caches konkrete nächste Schritte aus:
+  - `systemctl --user daemon-reload`
+  - optional `update-desktop-database "$HOME/.local/share/applications"`
+  - ggf. Logout/Login (oder Reboot) zur Launcher-Aktualisierung

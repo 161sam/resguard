@@ -576,7 +576,12 @@ pub(crate) fn handle_setup(
     commands::setup::handle_setup(format, root, config_dir, state_dir, name, apply, suggest)
 }
 
-pub(crate) fn handle_rollback(root: &str, state_dir: &str, last: bool, to: Option<String>) -> Result<i32> {
+pub(crate) fn handle_rollback(
+    root: &str,
+    state_dir: &str,
+    last: bool,
+    to: Option<String>,
+) -> Result<i32> {
     println!("command=rollback");
     println!("last={} to={to:?}", last);
 
@@ -631,11 +636,20 @@ pub(crate) fn resolve_class_slice(profile: &Profile, class_name: &str) -> Option
 }
 
 #[cfg(test)]
-pub(crate) fn build_rescue_command(shell: &str, custom_command: Option<&str>, no_ui: bool) -> Vec<String> {
+pub(crate) fn build_rescue_command(
+    shell: &str,
+    custom_command: Option<&str>,
+    no_ui: bool,
+) -> Vec<String> {
     commands::rescue::build_rescue_command(shell, custom_command, no_ui)
 }
 
-pub(crate) fn handle_run(root: &str, config_dir: &str, state_dir: &str, req: RunRequest) -> Result<i32> {
+pub(crate) fn handle_run(
+    root: &str,
+    config_dir: &str,
+    state_dir: &str,
+    req: RunRequest,
+) -> Result<i32> {
     println!("command=run");
     println!(
         "class={} profile={:?} slice={:?} no_check={} wait={} command={:?}",
@@ -1348,7 +1362,12 @@ pub(crate) fn create_override_backup(path: &Path) -> Result<PathBuf> {
     Ok(backup_path)
 }
 
-pub(crate) fn render_line_diff(source_label: &str, source: &str, target_label: &str, target: &str) -> String {
+pub(crate) fn render_line_diff(
+    source_label: &str,
+    source: &str,
+    target_label: &str,
+    target: &str,
+) -> String {
     let a: Vec<&str> = source.lines().collect();
     let b: Vec<&str> = target.lines().collect();
     let m = a.len();
@@ -1493,7 +1512,11 @@ pub(crate) fn print_desktop_table(items: &[DesktopListItem]) {
     }
 }
 
-pub(crate) fn handle_desktop_list(format: &str, filter: Option<String>, origin: DesktopOrigin) -> Result<i32> {
+pub(crate) fn handle_desktop_list(
+    format: &str,
+    filter: Option<String>,
+    origin: DesktopOrigin,
+) -> Result<i32> {
     let mapped = match origin {
         DesktopOrigin::User => crate::cli::DesktopOrigin::User,
         DesktopOrigin::System => crate::cli::DesktopOrigin::System,
@@ -1509,11 +1532,19 @@ pub(crate) fn command_exists_in_path(cmd: &str) -> bool {
     env::split_paths(&path_var).any(|p| p.join(cmd).is_file())
 }
 
-pub(crate) fn handle_desktop_wrap(desktop_id: &str, class: &str, opts: DesktopWrapOptions) -> Result<i32> {
+pub(crate) fn handle_desktop_wrap(
+    desktop_id: &str,
+    class: &str,
+    opts: DesktopWrapOptions,
+) -> Result<i32> {
     commands::desktop::handle_desktop_wrap(desktop_id, class, opts)
 }
 
-pub(crate) fn handle_desktop_unwrap(desktop_id: &str, class: &str, opts: DesktopUnwrapOptions) -> Result<i32> {
+pub(crate) fn handle_desktop_unwrap(
+    desktop_id: &str,
+    class: &str,
+    opts: DesktopUnwrapOptions,
+) -> Result<i32> {
     commands::desktop::handle_desktop_unwrap(desktop_id, class, opts)
 }
 
@@ -1537,7 +1568,10 @@ pub(crate) fn validate_wrapper_file(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn run_desktop_doctor_checks(print_command: bool, require_mapping: bool) -> Result<(bool, bool)> {
+pub(crate) fn run_desktop_doctor_checks(
+    print_command: bool,
+    require_mapping: bool,
+) -> Result<(bool, bool)> {
     if print_command {
         println!("command=desktop doctor");
     }
@@ -1622,11 +1656,21 @@ pub(crate) fn run_desktop_doctor_checks(print_command: bool, require_mapping: bo
     if needs_user_reload_hint {
         println!("Hints");
         println!("WARN user daemon reload may be required");
-        println!("fix: systemctl --user daemon-reload");
-        println!("fix: loginctl terminate-user \"$USER\"   # or logout/login");
+        for hint in desktop_launcher_refresh_hints() {
+            println!("fix: {hint}");
+        }
     }
 
     Ok((partial, has_mappings))
+}
+
+pub(crate) fn desktop_launcher_refresh_hints() -> &'static [&'static str] {
+    &[
+        "systemctl --user daemon-reload",
+        "update-desktop-database \"$HOME/.local/share/applications\"   # optional, if available",
+        "gtk-update-icon-cache \"$HOME/.local/share/icons\"   # optional, if used",
+        "log out and log back in (or reboot) to refresh launcher cache",
+    ]
 }
 
 pub(crate) fn handle_desktop_doctor() -> Result<i32> {
@@ -2446,6 +2490,36 @@ mod tests {
         assert!(wrapped.contains("Exec=resguard run --class browsers -- /snap/bin/firefox %u\n"));
         assert!(wrapped.contains("DBusActivatable=false\n"));
         assert!(!wrapped.contains("DBusActivatable=true\n"));
+    }
+
+    #[test]
+    fn render_wrapper_for_snap_firefox_keeps_exec_path() {
+        let mut src = HashMap::new();
+        src.insert("Name".to_string(), "Firefox Web Browser".to_string());
+        src.insert("Exec".to_string(), "/snap/bin/firefox %u".to_string());
+        src.insert("Type".to_string(), "Application".to_string());
+        src.insert("Icon".to_string(), "firefox".to_string());
+        src.insert("StartupWMClass".to_string(), "firefox".to_string());
+
+        let wrapped = render_wrapper(&src, "browsers").expect("render wrapper");
+        assert!(wrapped.contains("Name=Firefox Web Browser (Resguard: browsers)\n"));
+        assert!(wrapped.contains("Exec=resguard run --class browsers -- /snap/bin/firefox %u\n"));
+        assert!(wrapped.contains("Icon=firefox\n"));
+        assert!(wrapped.contains("StartupWMClass=firefox\n"));
+    }
+
+    #[test]
+    fn desktop_launcher_refresh_hints_include_actionable_steps() {
+        let hints = desktop_launcher_refresh_hints();
+        assert!(hints
+            .iter()
+            .any(|hint| hint.contains("systemctl --user daemon-reload")));
+        assert!(hints
+            .iter()
+            .any(|hint| hint.contains("update-desktop-database")));
+        assert!(hints
+            .iter()
+            .any(|hint| hint.contains("log out and log back in")));
     }
 
     #[test]

@@ -1,4 +1,26 @@
 use crate::*;
+use std::io;
+use std::io::IsTerminal;
+#[cfg(feature = "tui")]
+use std::time::{Duration, Instant};
+
+#[cfg(feature = "tui")]
+use crossterm::event::{self, Event, KeyCode};
+#[cfg(feature = "tui")]
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
+#[cfg(feature = "tui")]
+use crossterm::ExecutableCommand;
+
+#[cfg(feature = "tui")]
+use ratatui::backend::CrosstermBackend;
+#[cfg(feature = "tui")]
+use ratatui::layout::{Constraint, Direction, Layout};
+#[cfg(feature = "tui")]
+use ratatui::widgets::{Block, Borders, Cell, Gauge, Paragraph, Row, Table};
+#[cfg(feature = "tui")]
+use ratatui::Terminal;
 
 #[cfg(feature = "tui")]
 #[derive(Debug, Clone)]

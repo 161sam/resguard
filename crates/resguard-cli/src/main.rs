@@ -1,3 +1,5 @@
+#![allow(dead_code, unused_imports)]
+
 use anyhow::{anyhow, Context, Result};
 use clap::CommandFactory;
 use clap_complete::{generate, Shell};

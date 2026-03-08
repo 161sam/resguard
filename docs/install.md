@@ -46,6 +46,11 @@ sudo apt update
 sudo apt install -y resguard
 ```
 
+Praktische Einordnung:
+
+- `apt install resguard` ist der Standardweg für das Core-CLI.
+- Für `resguardd` (optional) nutze weiterhin das `_daemon.deb` aus den GitHub Release Assets.
+
 Das Repository wird signiert über GitHub Pages ausgeliefert (`Release.gpg` + `InRelease`).
 
 Updates:
@@ -67,3 +72,33 @@ sudo apt upgrade -y
 Wenn ein neues Tag bereits als GitHub Release verfügbar ist, aber noch nicht im APT Repo erscheint,
 ist typischerweise das Signing-Secret im Publishing-Workflow noch nicht gesetzt.
 In diesem Fall vorübergehend den Release-Asset-Weg nutzen und Maintainer-Doku in `docs/releases.md` prüfen.
+
+## Optional daemon package (`resguardd`)
+
+Wenn du den optionalen Daemon nutzen willst:
+
+1. Core über APT installieren (`resguard`).
+2. Danach das versionsgleiche Daemon-Asset installieren:
+
+```bash
+curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.2.1/resguard_0.2.1_amd64_daemon.deb"
+sudo apt install -y ./resguard_0.2.1_amd64_daemon.deb
+```
+
+Hinweis:
+
+- Der Daemon bleibt auch nach Installation deaktiviert, bis er explizit aktiviert wird.
+
+## Quick validation (daemon)
+
+Nach Installation des Daemon-Pakets:
+
+```bash
+resguard daemon status
+sudo resguardd --once
+```
+
+Erwartung:
+
+- `resguard daemon status` zeigt den aktuellen Service-Zustand.
+- `sudo resguardd --once` läuft einmalig durch (ohne den Service dauerhaft zu starten).

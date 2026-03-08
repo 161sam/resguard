@@ -79,12 +79,20 @@ Unterschiede:
 
 - GitHub Release Asset: manueller Download und manuelles Upgrade pro Version.
 - APT Repository: einmal einrichten, danach Upgrades über den normalen `apt`-Prozess.
+- `apt install resguard` deckt den Core-Weg ab; optionales `resguardd` weiter über das `_daemon.deb`-Release-Asset installieren.
 
 Hinweis zur Veröffentlichung:
 
 - Die APT-Metadaten werden signiert veröffentlicht.
 - Falls das Signing-Secret noch nicht eingerichtet ist, wird nur der GitHub-Release-Upload ausgeführt.
 - Details: [docs/releases.md](docs/releases.md)
+
+Daemon-Validierung nach Installation des optionalen `_daemon.deb`:
+
+```bash
+resguard daemon status
+sudo resguardd --once
+```
 
 ## Post-install Quickstart
 

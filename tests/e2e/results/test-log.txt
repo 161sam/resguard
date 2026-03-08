@@ -1,0 +1,321 @@
+Resguard Ubuntu Field Test So 8. Mär 17:33:52 CET 2026
+---- SYSTEM ----
+Linux getac 6.8.0-101-generic #101-Ubuntu SMP PREEMPT_DYNAMIC Mon Feb  9 10:15:05 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux
+Distributor ID:	Ubuntu
+Description:	Ubuntu 24.04.4 LTS
+Release:	24.04
+Codename:	noble
+Session: x11
+DE: ubuntu:GNOME
+---- INSTALL ----
+/usr/bin/resguard
+Linux resource guard using systemd slices
+
+Usage: resguard [OPTIONS] <COMMAND>
+
+Commands:
+  init        
+  setup       
+  apply       
+  diff        
+  rollback    
+  doctor      
+  metrics     
+  panic       
+  status      
+  suggest     
+  run         
+  rescue      
+  profile     
+  desktop     
+  daemon      
+  completion  
+  help        Print this message or the help of the given subcommand(s)
+
+Options:
+      --format <FORMAT>          [default: table]
+      --json-log                 Emit structured logs to stderr
+      --verbose                  
+      --quiet                    
+      --no-color                 
+      --root <ROOT>              [default: /]
+      --config-dir <CONFIG_DIR>  [default: /etc/resguard]
+      --state-dir <STATE_DIR>    [default: /var/lib/resguard]
+  -h, --help                     Print help
+ii  resguard                                                 0.2.1                                    amd64        Linux system resource guard using systemd slices
+---- DOCTOR ----
+format=table json_log=false verbose=false quiet=false no_color=false root=/ config_dir=/etc/resguard state_dir=/var/lib/resguard
+command=doctor
+System checks
+OK  systemd detected
+OK  cgroups v2 active
+OK  systemd-oomd enabled
+
+Resguard checks
+OK  state.json present (/var/lib/resguard/state.json)
+OK  class slices installed
+
+Hints
+WARN user daemon reload may be required in active session
+fix: systemctl --user daemon-reload
+fix: logout/login
+---- SETUP ----
+format=table json_log=false verbose=false quiet=false no_color=false root=/ config_dir=/etc/resguard state_dir=/var/lib/resguard
+command=setup
+profile=auto apply=true suggest=false
+command=init
+result=written
+path=/etc/resguard/profiles/auto.yml
+command=apply
+profile=auto dry_run=false no_oomd=false no_cpu=false no_classes=false force=false user_daemon_reload=false
+plan:
+  ensure_dir	/etc/systemd/system/system.slice.d
+  ensure_dir	/etc/systemd/system/user.slice.d
+  write_file	/etc/systemd/system/system.slice.d/50-resguard.conf
+  write_file	/etc/systemd/system/user.slice.d/50-resguard.conf
+  ensure_dir	/etc/systemd/system
+  ensure_dir	/etc/systemd/user
+  write_file	/etc/systemd/system/resguard-browsers.slice
+  write_file	/etc/systemd/user/resguard-browsers.slice
+  write_file	/etc/systemd/system/resguard-heavy.slice
+  write_file	/etc/systemd/user/resguard-heavy.slice
+  write_file	/etc/systemd/system/resguard-ide.slice
+  write_file	/etc/systemd/user/resguard-ide.slice
+  write_file	/etc/systemd/system/resguard-rescue.slice
+  write_file	/etc/systemd/user/resguard-rescue.slice
+  exec	systemctl daemon-reload
+plan_write_changes=2
+result=ok
+setup.result=ok
+setup.profile=auto
+setup.apply_executed=true
+changed=profile_initialized_and_apply_executed
+rollback_hint=resguard rollback --last
+user_reload_hint=systemctl --user daemon-reload
+followup=for desktop wraps run: resguard suggest --dry-run
+followup=apply suggestions with confidence gate: resguard suggest --apply
+---- STATUS ----
+format=table json_log=false verbose=false quiet=false no_color=false root=/ config_dir=/etc/resguard state_dir=/var/lib/resguard
+command=status
+active_profile=auto
+class_slices=resguard-browsers.slice,resguard-heavy.slice,resguard-ide.slice,resguard-rescue.slice
+system.slice	MemoryLow=2147483648	MemoryHigh=infinity	MemoryMax=infinity	AllowedCPUs=-
+user.slice	MemoryLow=0	MemoryHigh=11811160064	MemoryMax=13958643712	AllowedCPUs=-
+resguard-browsers.slice	MemoryLow=0	MemoryHigh=infinity	MemoryMax=6442450944	AllowedCPUs=-
+resguard-heavy.slice	MemoryLow=0	MemoryHigh=infinity	MemoryMax=3221225472	AllowedCPUs=-
+resguard-ide.slice	MemoryLow=0	MemoryHigh=infinity	MemoryMax=4294967296	AllowedCPUs=-
+resguard-rescue.slice	MemoryLow=0	MemoryHigh=infinity	MemoryMax=1073741824	AllowedCPUs=-
+user:resguard-browsers.slice	MemoryLow=0	MemoryHigh=infinity	MemoryMax=6442450944	AllowedCPUs=-
+active
+oomd_active=true
+psi_memory_avg60=0.00
+psi_cpu_avg60=5.32
+---- METRICS ----
+format=table json_log=false verbose=false quiet=false no_color=false root=/ config_dir=/etc/resguard state_dir=/var/lib/resguard
+command=metrics
+CPU pressure
+avg60=5.59
+Memory pressure
+avg60=0.00
+IO pressure
+avg60=0.01
+
+System memory
+total=15G
+available=8G
+used=7G
+
+User slice usage
+user.slice MemoryCurrent: 10G
+user.slice MemoryHigh: 11811160064
+user.slice MemoryMax: 13958643712
+
+Top slices
+user.slice 10G
+user-1003.slice 9G
+system.slice 1G
+system-tor.slice 94M
+system-systemd\x2dfsck.slice 204800B
+---- SUGGEST ----
+format=table json_log=false verbose=false quiet=false no_color=false root=/ config_dir=/etc/resguard state_dir=/var/lib/resguard
+command=suggest
+apply=false dry_run=true confidence_threshold=70 profile=None
+profile_source=auto
+scope	class	confidence	desktop_id	memory	reason
+snap.code.code-a6627914-ff0a-420a-92c3-00176ca7450c.scope	ide	40	-	3G	matched profile rule /(?i)code|codium|idea|pycharm|clion|goland/
+snap.firefox.firefox-b9d025bd-f12b-48fb-a535-b042e1d92bee.scope	browsers	40	-	3G	matched profile rule /(?i)firefox|chrome|chromium|brave|opera|vivaldi/
+
+dry_run_preview
+skip	snap.code.code-a6627914-ff0a-420a-92c3-00176ca7450c.scope	ide	confidence 40 below threshold 70 (pattern)
+skip	snap.firefox.firefox-b9d025bd-f12b-48fb-a535-b042e1d92bee.scope	browsers	confidence 40 below threshold 70 (pattern)
+---- RUN FIREFOX ----
+---- RESCUE ----
+---- PANIC ----
+---- PANIC ----
+---- DESKTOP DISCOVERY ----
+format=table json_log=false verbose=false quiet=false no_color=false root=/ config_dir=/etc/resguard state_dir=/var/lib/resguard
+command=desktop list
+desktop_id	name	exec	origin
+AppFlowy.desktop	AppFlowy	/usr/bin/AppFlowy %U	system
+Superalgos.desktop	Superalgos	/home/dev/Documents/Superalgos/Launch-Scripts/launch-linux-mac.sh	user
+Zoom.desktop	Zoom Workplace	/usr/bin/zoom %U	system
+affine.desktop	AFFiNE	affine %U	system
+android-studio.desktop	Android Studio	/opt/android-studio-2024.2.1/android-studio/bin/studio.sh	system
+apport-gtk.desktop	Report a problem...	/usr/share/apport/apport-gtk -c %f	system
+balena-etcher.desktop	balenaEtcher	balena-etcher %U	system
+bluetooth-sendto.desktop	Bluetooth Transfer	bluetooth-sendto	system
+ca.desrt.dconf-editor.desktop	dconf Editor	dconf-editor	system
+claude-desktop.desktop	Claude	/usr/bin/claude-desktop %u	system
+com.nextcloud.desktopclient.nextcloud.desktop	Nextcloud Desktop	nextcloud %u	system
+conky.desktop	conky	conky --daemonize --pause=1	system
+display-im6.q16.desktop	ImageMagick (color depth=q16)	/usr/bin/display-im6.q16 -nostdin %F	system
+feh.desktop	Feh	feh %F	system
+gcr-prompter.desktop	Access Prompt	/usr/libexec/gcr-prompter	system
+gcr-viewer.desktop	View file	/usr/bin/gcr-viewer	system
+geoclue-demo-agent.desktop	Geoclue Demo agent	/usr/libexec/geoclue-2.0/demos/agent	system
+github-desktop.desktop	GitHub Desktop	github-desktop %U	system
+gkbd-keyboard-display.desktop	Keyboard Layout	gkbd-keyboard-display	system
+gnome-about-panel.desktop	About	gnome-control-center system about	system
+gnome-applications-panel.desktop	Apps	gnome-control-center applications	system
+gnome-background-panel.desktop	Appearance	gnome-control-center background	system
+gnome-bluetooth-panel.desktop	Bluetooth	gnome-control-center bluetooth	system
+gnome-color-panel.desktop	Color	gnome-control-center color	system
+gnome-datetime-panel.desktop	Date & Time	gnome-control-center system datetime	system
+gnome-disk-image-mounter.desktop	Disk Image Mounter	gnome-disk-image-mounter %U	system
+gnome-disk-image-writer.desktop	Disk Image Writer	gnome-disks --restore-disk-image %U	system
+gnome-display-panel.desktop	Displays	gnome-control-center display	system
+gnome-initial-setup.desktop	Initial Setup	/usr/libexec/gnome-initial-setup-wrapper /usr/libexec/gnome-initial-setup	system
+gnome-keyboard-panel.desktop	Keyboard	gnome-control-center keyboard	system
+gnome-language-selector.desktop	Language Support	/usr/bin/gnome-language-selector	system
+gnome-mouse-panel.desktop	Mouse & Touchpad	gnome-control-center mouse	system
+gnome-multitasking-panel.desktop	Multitasking	gnome-control-center multitasking	system
+gnome-network-panel.desktop	Network	gnome-control-center network	system
+gnome-notifications-panel.desktop	Notifications	gnome-control-center notifications	system
+gnome-online-accounts-panel.desktop	Online Accounts	gnome-control-center online-accounts	system
+gnome-power-panel.desktop	Power	gnome-control-center power	system
+gnome-printers-panel.desktop	Printers	gnome-control-center printers	system
+gnome-privacy-panel.desktop	Privacy & Security	gnome-control-center privacy	system
+gnome-region-panel.desktop	Region & Language	gnome-control-center system region	system
+gnome-search-panel.desktop	Search	gnome-control-center search	system
+gnome-session-properties.desktop	Startup Applications	gnome-session-properties	system
+gnome-sharing-panel.desktop	Sharing	gnome-control-center sharing	system
+gnome-software-local-file-flatpak.desktop	Software Install	gnome-software --local-filename %f	system
+gnome-software-local-file-fwupd.desktop	Software Install	gnome-software --local-filename %f	system
+gnome-software-local-file-packagekit.desktop	Software Install	gnome-software --local-filename %f	system
+gnome-software-local-file-snap.desktop	Software Install	gnome-software --local-filename %f	system
+gnome-sound-panel.desktop	Sound	gnome-control-center sound	system
+gnome-system-monitor-kde.desktop	GNOME System Monitor	gnome-system-monitor	system
+gnome-system-panel.desktop	System	gnome-control-center system	system
+gnome-ubuntu-panel.desktop	Ubuntu Desktop	gnome-control-center ubuntu	system
+gnome-universal-access-panel.desktop	Accessibility	gnome-control-center universal-access	system
+gnome-user-share-webdav.desktop	File Sharing	/usr/libexec/gnome-user-share-webdav	system
+gnome-users-panel.desktop	Users	gnome-control-center system users	system
+gnome-wacom-panel.desktop	Wacom Tablet	gnome-control-center wacom	system
+gnome-wifi-panel.desktop	Wi-Fi	gnome-control-center wifi	system
+gnome-wwan-panel.desktop	Mobile Network	gnome-control-center wwan	system
+google-maps-geo-handler.desktop	Google Maps	kde-geo-uri-handler --coordinate-template "https://www.google.com/maps/@<LAT>...	system
+gparted.desktop	GParted	/usr/sbin/gparted %f	system
+groovyConsole.desktop	Groovy Console	/usr/bin/groovyConsole	system
+hplj1020.desktop	Reactivate HP LaserJet 1018/1020 after reloading paper	/usr/share/foo2zjs/hplj10xx_gui.tcl	system
+htop.desktop	Htop	htop	system
+ibus-setup-table.desktop	IBus Table Setup	/usr/libexec/ibus-setup-table	system
+idle-python3.12.desktop	IDLE (using Python-3.12)	/usr/bin/idle-python3.12	system
+idle.desktop	IDLE	/usr/bin/idle %F	system
+im-config.desktop	Input Method	im-config	system
+info.desktop	TeXInfo	info	system
+io.snapcraft.SessionAgent.desktop	Snapd User Session Agent	/bin/false	system
+kcm_kdeconnect.desktop	KDE Connect	systemsettings kcm_kdeconnect	system
+kcm_trash.desktop	Trash	kcmshell5 kcm_trash	system
+ktelnetservice5.desktop	KTelnetService	ktelnetservice5 %u	system
+libreoffice-startcenter.desktop	LibreOffice	libreoffice %U	system
+libreoffice-xsltfilter.desktop	LibreOffice XSLT based filters	libreoffice %U	system
+minicom.desktop	minicom	minicom	system
+mpv.desktop	mpv Media Player	mpv --player-operation-mode=pseudo-gui -- %U	system
+nautilus-autorun-software.desktop	Run Software	nautilus-autorun-software %u	system
+nm-applet.desktop	NetworkManager Applet	nm-applet	system
+nm-connection-editor.desktop	Advanced Network Configuration	nm-connection-editor	system
+nsight-compute-2023.3.1.desktop	NVIDIA Nsight Compute 2023.3.1	/opt/nvidia/nsight-compute/2023.3.1/host/linux-desktop-glibc_2_11_3-x64/ncu-ui	system
+nsight.desktop	Nsight Eclipse Edition	/usr/local/cuda-12.3/bin/nsight	system
+nsys-ui-2023.3.3.desktop	NVIDIA Nsight Systems 2023.3.3	/opt/nvidia/nsight-systems/2023.3.3/host-linux-x64/nsys-ui	system
+nvvp.desktop	NVIDIA Visual Profiler	/usr/local/cuda-12.3/bin/nvvp	system
+openjdk-11-java.desktop	OpenJDK Java 11 Runtime	cautious-launcher %f /usr/bin/java -jar	system
+openjdk-21-java.desktop	OpenJDK Java 21 Runtime	cautious-launcher %f /usr/bin/java -jar	system
+openstreetmap-geo-handler.desktop	OpenStreetMap	kde-geo-uri-handler --coordinate-template "https://www.openstreetmap.org/#map...	system
+org.freedesktop.IBus.Panel.Emojier.desktop	Emoji Choice	ibus emoji	system
+org.freedesktop.IBus.Panel.Extension.Gtk3.desktop	Emoji Choice	/usr/libexec/ibus-extension-gtk3	system
+org.freedesktop.IBus.Panel.Wayland.Gtk3.desktop	IBus Wayland	/usr/libexec/ibus-ui-gtk3 --enable-wayland-im --exec-daemon --daemon-args "--...	system
+org.freedesktop.IBus.Setup.desktop	IBus Preferences	ibus-setup	system
+org.freedesktop.Xwayland.desktop	Xwayland		system
+org.freedesktop.impl.portal.desktop.kde.desktop	Portal	/usr/lib/x86_64-linux-gnu/libexec/xdg-desktop-portal-kde	system
+org.gnome.Calculator.desktop	Calculator	gnome-calculator	system
+org.gnome.Characters.desktop	Characters	/usr/bin/gnome-characters	system
+org.gnome.Cheese.desktop	Cheese	cheese	system
+org.gnome.DiskUtility.desktop	Disks	gnome-disks	system
+org.gnome.Evince-previewer.desktop	Print Preview	evince-previewer %U	system
+org.gnome.Evince.desktop	Document Viewer	evince %U	system
+org.gnome.Evolution-alarm-notify.desktop	Events and Tasks Reminders	/usr/libexec/evolution-data-server/evolution-alarm-notify	system
+org.gnome.FileRoller.desktop	File Roller	file-roller %U	system
+org.gnome.Logs.desktop	Logs	gnome-logs	system
+org.gnome.Nautilus.desktop	Files	nautilus --new-window %U	system
+org.gnome.NetworkDisplays.desktop	GNOME Network Displays	gnome-network-displays	system
+org.gnome.OnlineAccounts.OAuth2.desktop	GNOME OAuth2 Handler	/usr/libexec/goa-oauth2-handler %u	system
+org.gnome.PowerStats.desktop	Power Statistics	gnome-power-statistics	system
+org.gnome.RemoteDesktop.Handover.desktop	GNOME Remote Desktop Handover Daemon	/usr/libexec/gnome-remote-desktop-daemon --handover	system
+org.gnome.Settings.desktop	Settings	gnome-control-center	system
+org.gnome.Shell.Extensions.desktop	Extensions	false	system
+org.gnome.Shell.desktop	GNOME Shell	/usr/bin/gnome-shell	system
+org.gnome.Snapshot.desktop	Camera	snapshot	system
+org.gnome.Software.desktop	Software	gnome-software %U	system
+org.gnome.SystemMonitor.desktop	System Monitor	gnome-system-monitor	system
+org.gnome.Tecla.desktop	Tecla	tecla	system
+org.gnome.Terminal.Preferences.desktop	Terminal Preferences	gnome-terminal --preferences	system
+org.gnome.Terminal.desktop	Terminal	gnome-terminal	system
+org.gnome.TextEditor.desktop	Text Editor	gnome-text-editor %U	system
+org.gnome.Zenity.desktop	Zenity	zenity	system
+org.gnome.baobab.desktop	Disk Usage Analyzer	baobab %U	system
+org.gnome.clocks.desktop	Clocks	gnome-clocks	system
+org.gnome.eog.desktop	Image Viewer	eog %U	system
+org.gnome.evolution-data-server.OAuth2-handler.desktop	Evolution Data Server OAuth2 Handler	/usr/libexec/evolution-data-server/evolution-oauth2-handler %u	system
+org.gnome.font-viewer.desktop	Fonts	gnome-font-viewer %u	system
+org.gnome.seahorse.Application.desktop	Passwords and Keys	seahorse %u	system
+org.kde.kdeconnect-settings.desktop	KDE Connect Settings	kdeconnect-settings	system
+org.kde.kdeconnect.app.desktop	KDE Connect	kdeconnect-app	system
+org.kde.kdeconnect.daemon.desktop	KDE Connect	/usr/lib/x86_64-linux-gnu/libexec/kdeconnectd	system
+org.kde.kdeconnect.handler.desktop	KDE Connect	kdeconnect-handler %U	system
+org.kde.kdeconnect.nonplasma.desktop	KDE Connect Indicator	kdeconnect-indicator	system
+org.kde.kdeconnect.sms.desktop	KDE Connect SMS	kdeconnect-sms	system
+org.kde.keditbookmarks.desktop	Bookmark Editor	keditbookmarks	system
+org.kde.kwalletd5.desktop	KDE Wallet Service	kwalletd5	system
+org.raspberrypi.rpi-imager.desktop	Imager	rpi-imager %F	system
+piavpn.desktop	Private Internet Access	env XDG_SESSION_TYPE=X11 /opt/piavpn/bin/pia-client %u	system
+process-timer.desktop	Process Timer	process-timer	system
+python3.10.desktop	Python (v3.10)	/usr/bin/python3.10	system
+python3.11.desktop	Python (v3.11)	/usr/bin/python3.11	system
+python3.12.desktop	Python (v3.12)	/usr/bin/python3.12	system
+qwant-maps-geo-handler.desktop	Qwant Maps	kde-geo-uri-handler --coordinate-template "https://www.qwant.com/maps/#map=<Z...	system
+realvnc-vncviewer.desktop	VNC Viewer	vncviewer %f	system
+rygel.desktop	Rygel	rygel	system
+snap-handle-link.desktop	Handler for snap:// URIs	/usr/bin/snap handle-link %U	system
+software-properties-drivers.desktop	Additional Drivers	/usr/bin/software-properties-gtk --open-tab=4	system
+software-properties-gtk.desktop	Software & Updates	software-properties-gtk	system
+software-properties-livepatch.desktop	Livepatch	/usr/bin/software-properties-gtk --open-tab=6	system
+steam.desktop	Install Steam	/usr/games/steam %U	system
+syncthing-start.desktop	Start Syncthing	/usr/bin/syncthing serve --no-browser --logfile=default	system
+syncthing-ui.desktop	Syncthing Web UI	/usr/bin/syncthing --browser-only	system
+torbrowser-settings.desktop	Tor Browser Launcher Settings	torbrowser-launcher --settings	system
+torbrowser.desktop	Tor Browser	torbrowser-launcher %u	system
+transmission-gtk.desktop	Transmission	transmission-gtk %U	system
+update-manager.desktop	Software Updater	/usr/bin/update-manager	system
+vim.desktop	Vim	vim %F	system
+virtualbox.desktop	VirtualBox	VirtualBox %U	system
+vite.desktop	ViTE	/usr/bin/vite	system
+wheelmap-geo-handler.desktop	wheelmap.org	kde-geo-uri-handler --coordinate-template "https://wheelmap.org/?lat=<LAT>&lo...	system
+xdg-desktop-portal-gnome.desktop	Portal	/usr/libexec/xdg-desktop-portal-gnome	system
+xdg-desktop-portal-gtk.desktop	Portal	/usr/libexec/xdg-desktop-portal-gtk	system
+yad-icon-browser.desktop	Icon Browser	yad-icon-browser	system
+yelp.desktop	Help	yelp %u	system
+format=table json_log=false verbose=false quiet=false no_color=false root=/ config_dir=/etc/resguard state_dir=/var/lib/resguard
+command=desktop list
+desktop_id	name	exec	origin
+---- TEST COMPLETE ----
+So 8. Mär 17:38:47 CET 2026

@@ -1764,11 +1764,15 @@ fn render_wrapper(source: &HashMap<String, String>, class: &str) -> Result<Strin
         "Path",
         "GenericName",
         "Comment",
-        "DBusActivatable",
     ] {
         if let Some(v) = source.get(k) {
             out.push_str(&format!("{k}={v}\n"));
         }
+    }
+
+    // Wrappers must route via Exec; force DBus activation off so launchers do not bypass Exec.
+    if source.contains_key("DBusActivatable") {
+        out.push_str("DBusActivatable=false\n");
     }
     Ok(out)
 }
@@ -1989,7 +1993,7 @@ fn resolve_desktop_source(desktop_id: &str) -> Result<DesktopSourceEntry> {
         .strip_suffix(".desktop")
         .ok_or_else(|| anyhow!("desktop id must end with .desktop"))?;
     let entries = discover_desktop_entries(DesktopOrigin::All, None)?;
-    let mut alias_hits: Vec<DesktopListItem> = Vec::new();
+    let mut alias_hits_by_id: BTreeMap<String, DesktopListItem> = BTreeMap::new();
     for item in entries {
         let Some(stem) = item.desktop_id.strip_suffix(".desktop") else {
             continue;
@@ -2000,9 +2004,15 @@ fn resolve_desktop_source(desktop_id: &str) -> Result<DesktopSourceEntry> {
             parse_first_exec_token(&item.exec).is_some_and(|bin| bin == requested_stem);
         let name_match = item.name.eq_ignore_ascii_case(requested_stem);
         if stem_match || exec_match || name_match {
-            alias_hits.push(item);
+            match alias_hits_by_id.get(&item.desktop_id) {
+                Some(existing) if existing.origin == "user" => {}
+                _ => {
+                    alias_hits_by_id.insert(item.desktop_id.clone(), item);
+                }
+            }
         }
     }
+    let alias_hits: Vec<DesktopListItem> = alias_hits_by_id.into_values().collect();
 
     if alias_hits.len() == 1 {
         let only = alias_hits
@@ -3428,6 +3438,23 @@ mod tests {
     }
 
     #[test]
+    fn resolve_desktop_source_allows_firefox_snap_alias() {
+        let temp = tempdir().expect("tempdir");
+        let xdg_home = temp.path().join("xdg-home");
+        let _xdg_guard = DesktopEnvGuard::set(Some(&xdg_home), None);
+        let apps = xdg_home.join("applications");
+        std::fs::create_dir_all(&apps).expect("create app dir");
+        std::fs::write(
+            apps.join("firefox_firefox.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Firefox Web Browser\nExec=/snap/bin/firefox %u\n",
+        )
+        .expect("write firefox desktop file");
+
+        let source = resolve_desktop_source("firefox.desktop").expect("resolve firefox alias");
+        assert_eq!(source.desktop_id, "firefox_firefox.desktop");
+    }
+
+    #[test]
     fn resolve_desktop_source_rejects_ambiguous_alias() {
         let temp = tempdir().expect("tempdir");
         let xdg_home = temp.path().join("xdg-home");
@@ -3466,6 +3493,20 @@ mod tests {
         assert!(wrapped.contains("Icon=firefox\n"));
         assert!(wrapped.contains("Terminal=false\n"));
         assert!(wrapped.contains("Categories=Network;WebBrowser;\n"));
+    }
+
+    #[test]
+    fn render_wrapper_forces_dbus_activatable_false() {
+        let mut src = HashMap::new();
+        src.insert("Name".to_string(), "Firefox".to_string());
+        src.insert("Exec".to_string(), "/snap/bin/firefox %u".to_string());
+        src.insert("Type".to_string(), "Application".to_string());
+        src.insert("DBusActivatable".to_string(), "true".to_string());
+
+        let wrapped = render_wrapper(&src, "browsers").expect("render wrapper");
+        assert!(wrapped.contains("Exec=resguard run --class browsers -- /snap/bin/firefox %u\n"));
+        assert!(wrapped.contains("DBusActivatable=false\n"));
+        assert!(!wrapped.contains("DBusActivatable=true\n"));
     }
 
     #[test]

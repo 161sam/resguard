@@ -66,9 +66,7 @@ pub(crate) fn handle_desktop_wrap(
         .map(|v| v.eq_ignore_ascii_case("true"))
         .unwrap_or(false)
     {
-        eprintln!(
-            "warn: source desktop entry has DBusActivatable=true; wrapper may not be used by all launchers"
-        );
+        eprintln!("info: source desktop entry has DBusActivatable=true; wrapper will force DBusActivatable=false");
     }
 
     let wrapper_content = render_wrapper(&source.fields, class)?;

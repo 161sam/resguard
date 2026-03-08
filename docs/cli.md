@@ -272,3 +272,4 @@ Verhalten:
 - löst Desktop-ID zuerst exakt auf
 - wenn nicht gefunden: versucht sichere Alias-Auflösung für häufige Snap-Namen (z. B. Anfrage `firefox.desktop` -> `firefox_firefox.desktop`) nur bei eindeutiger Zuordnung
 - bei mehreren Treffern: Fehler mit Kandidatenliste (kein unsicheres Rateverhalten)
+- wenn die Quelle `DBusActivatable=true` hat, setzt der Wrapper explizit `DBusActivatable=false`, damit Launcher `Exec=` des Wrappers verwenden

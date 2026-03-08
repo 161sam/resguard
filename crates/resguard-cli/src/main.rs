@@ -1344,10 +1344,42 @@ fn classify_scope(
     None
 }
 
+fn canonical_app_identity(scope: &str, exec_start: &str) -> Option<String> {
+    if let Some(app) = parse_snap_app_from_scope(scope) {
+        return Some(app.to_ascii_lowercase());
+    }
+    if let Some(app) = parse_snap_run_app(exec_start) {
+        return Some(app.to_ascii_lowercase());
+    }
+    parse_first_exec_token(exec_start).map(|v| v.to_ascii_lowercase())
+}
+
+fn expected_class_for_known_app(app: &str) -> Option<&'static str> {
+    let app = app.to_ascii_lowercase();
+    if ["firefox", "chrome", "chromium", "brave", "opera", "vivaldi"].contains(&app.as_str()) {
+        return Some("browsers");
+    }
+    if ["code", "codium", "idea", "pycharm", "clion", "goland"].contains(&app.as_str()) {
+        return Some("ide");
+    }
+    if ["docker", "podman", "containerd"].contains(&app.as_str()) {
+        return Some("heavy");
+    }
+    None
+}
+
+fn strong_app_identity_match(scope: &str, exec_start: &str, class: &str) -> bool {
+    let Some(app) = canonical_app_identity(scope, exec_start) else {
+        return false;
+    };
+    expected_class_for_known_app(&app).is_some_and(|expected| expected == class)
+}
+
 fn confidence_score(
     pattern_match: bool,
     memory_threshold_match: bool,
     known_desktop_id: bool,
+    strong_identity_match: bool,
 ) -> (u8, String) {
     let mut score = 0u8;
     let mut reasons = Vec::new();
@@ -1362,6 +1394,10 @@ fn confidence_score(
     if known_desktop_id {
         score = score.saturating_add(30);
         reasons.push("desktop-id");
+    }
+    if strong_identity_match {
+        score = score.saturating_add(30);
+        reasons.push("identity");
     }
     if reasons.is_empty() {
         reasons.push("none");
@@ -3347,17 +3383,82 @@ mod tests {
 
     #[test]
     fn confidence_score_uses_all_signals() {
-        let (s1, r1) = confidence_score(true, true, true);
+        let (s1, r1) = confidence_score(true, true, true, true);
         assert_eq!(s1, 100);
         assert!(r1.contains("pattern"));
         assert!(r1.contains("memory"));
         assert!(r1.contains("desktop-id"));
+        assert!(r1.contains("identity"));
 
-        let (s2, _) = confidence_score(true, false, true);
+        let (s2, _) = confidence_score(true, false, true, false);
         assert_eq!(s2, 70);
 
-        let (s3, _) = confidence_score(false, true, false);
+        let (s3, _) = confidence_score(false, true, false, false);
         assert_eq!(s3, 30);
+    }
+
+    #[test]
+    fn confidence_score_boosts_common_snap_firefox_identity() {
+        let class = classify_scope(
+            "app-snap.firefox.firefox-1234.scope",
+            "app.slice",
+            "/usr/bin/snap run firefox",
+            300 * 1024_u64.pow(2),
+            &default_suggest_rules(),
+        )
+        .expect("classified firefox");
+        assert_eq!(class.class, "browsers");
+        let strong = strong_app_identity_match(
+            "app-snap.firefox.firefox-1234.scope",
+            "/usr/bin/snap run firefox",
+            &class.class,
+        );
+        assert!(strong);
+        let (score, reason) = confidence_score(class.pattern_match, false, false, strong);
+        assert_eq!(score, 70);
+        assert!(reason.contains("pattern"));
+        assert!(reason.contains("identity"));
+    }
+
+    #[test]
+    fn confidence_score_boosts_common_snap_code_identity() {
+        let class = classify_scope(
+            "app-snap.code.code-42.scope",
+            "app.slice",
+            "/usr/bin/snap run code --new-window",
+            300 * 1024_u64.pow(2),
+            &default_suggest_rules(),
+        )
+        .expect("classified code");
+        assert_eq!(class.class, "ide");
+        let strong = strong_app_identity_match(
+            "app-snap.code.code-42.scope",
+            "/usr/bin/snap run code --new-window",
+            &class.class,
+        );
+        assert!(strong);
+        let (score, _) = confidence_score(class.pattern_match, false, false, strong);
+        assert_eq!(score, 70);
+    }
+
+    #[test]
+    fn confidence_score_keeps_weak_or_ambiguous_matches_low() {
+        let class = classify_scope(
+            "app-random.scope",
+            "app.slice",
+            "/usr/bin/firefox --private-window",
+            256 * 1024_u64.pow(2),
+            &default_suggest_rules(),
+        )
+        .expect("classified weak firefox");
+        assert_eq!(class.class, "browsers");
+        let strong =
+            strong_app_identity_match("app-random.scope", "/usr/bin/unknown-browser", &class.class);
+        assert!(!strong);
+        let (score, reason) = confidence_score(class.pattern_match, false, false, strong);
+        assert_eq!(score, 40);
+        assert!(reason.contains("pattern"));
+        assert!(!reason.contains("identity"));
     }
 
     #[test]

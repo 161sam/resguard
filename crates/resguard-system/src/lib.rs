@@ -1,14 +1,9 @@
 use anyhow::{anyhow, Result};
+use resguard_model::PressureSnapshot;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct PressureSnapshot {
-    pub avg10: f64,
-    pub avg60: f64,
-}
 
 pub fn daemon_reload() -> Result<()> {
     Command::new("systemctl").arg("daemon-reload").status()?;

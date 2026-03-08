@@ -1,10 +1,13 @@
 [workspace]
-resolver = "2"
 members = [
-  "crates/resguard-cli",
-  "crates/resguard-daemon",
-  "crates/resguard-core",
-  "crates/resguard-system",
+  "crates/resguard-model",
+  "crates/resguard-policy",
+  "crates/resguard-discovery",
+  "crates/resguard-runtime",
   "crates/resguard-config",
-  "crates/resguard-state",
+  "crates/resguard-services",
+  "crates/resguard-cli",
+  "crates/resguard-daemon"
 ]
+
+resolver = "2"

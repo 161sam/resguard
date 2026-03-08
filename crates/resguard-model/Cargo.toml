@@ -1,10 +1,7 @@
 [package]
-name = "resguard-core"
+name = "resguard-model"
 version = "0.2.1"
 edition = "2021"
 
 [dependencies]
-
 serde = { version = "1", features = ["derive"] }
-regex = "1"
-resguard-model = { path = "../resguard-model" }

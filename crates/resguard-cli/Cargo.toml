@@ -28,3 +28,4 @@ resguard-core = { path = "../resguard-core" }
 resguard-system = { path = "../resguard-system" }
 resguard-config = { path = "../resguard-config" }
 resguard-state = { path = "../resguard-state" }
+resguard-model = { path = "../resguard-model" }

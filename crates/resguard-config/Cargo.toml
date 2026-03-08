@@ -8,3 +8,4 @@ edition = "2021"
 serde_yaml = "0.9"
 anyhow = "1"
 resguard-core = { path = "../resguard-core" }
+resguard-model = { path = "../resguard-model" }

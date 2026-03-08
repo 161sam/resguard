@@ -1,5 +1,10 @@
+//! Configuration crate for Resguard v3.
+//!
+//! Responsibility: profile/config loading, storage, and validation helpers.
+
 use anyhow::{anyhow, Result};
-use resguard_core::{validate_profile, Profile, ValidationError};
+use resguard_core::{validate_profile, ValidationError};
+use resguard_model::Profile;
 use std::fs;
 use std::path::{Path, PathBuf};
 

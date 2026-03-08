@@ -91,7 +91,9 @@ pub(crate) fn handle_suggest(req: SuggestRequest) -> Result<i32> {
         suggestions.push(Suggestion {
             scope,
             class: classified.class,
-            reason: classified.reason,
+            reason: SuggestionReason::Manual {
+                message: classified.reason,
+            },
             slice,
             exec_start,
             memory_current,

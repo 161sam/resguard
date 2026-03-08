@@ -3,10 +3,11 @@ use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use clap_complete::{generate, Shell};
 use regex::Regex;
 use resguard_config::{load_profile_from_store, profile_path, save_profile, validate_profile_file};
-use resguard_core::profile::{
-    Class, Cpu, Memory, Metadata, Oomd, Profile, Spec, SuggestRule, SystemMemory, UserMemory,
-};
 use resguard_core::{build_apply_plan, validate_profile, Action, PlanOptions};
+use resguard_model::{
+    Class, Cpu, Memory, Metadata, Oomd, Profile, Spec, SuggestRule, Suggestion, SuggestionReason,
+    SystemMemory, UserMemory,
+};
 use resguard_state::{
     begin_transaction, manifest_from_transaction, read_backup_manifest, read_state,
     rollback_from_manifest, snapshot_before_write, state_from_manifest, write_backup_manifest,
@@ -323,20 +324,6 @@ struct DesktopWrapOptions {
 #[derive(Debug, Clone, Copy)]
 struct DesktopUnwrapOptions {
     override_mode: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct Suggestion {
-    scope: String,
-    class: String,
-    reason: String,
-    slice: String,
-    exec_start: String,
-    memory_current: u64,
-    cpu_usage_nsec: u64,
-    desktop_id: Option<String>,
-    confidence: u8,
-    confidence_reason: String,
 }
 
 fn print_global_context(cli: &Cli) {
@@ -1430,6 +1417,16 @@ fn resolve_suggest_profile(
     }
 }
 
+fn suggestion_reason_text(reason: &SuggestionReason) -> String {
+    match reason {
+        SuggestionReason::PatternRule => "pattern-rule".to_string(),
+        SuggestionReason::MemoryThreshold => "memory-threshold".to_string(),
+        SuggestionReason::StrongIdentity => "strong-identity".to_string(),
+        SuggestionReason::DesktopIdMatch => "desktop-id-match".to_string(),
+        SuggestionReason::Manual { message } => message.clone(),
+    }
+}
+
 fn print_suggestions_table(suggestions: &[Suggestion]) {
     println!("scope\tclass\tconfidence\tdesktop_id\tmemory\treason");
     for s in suggestions {
@@ -1440,7 +1437,7 @@ fn print_suggestions_table(suggestions: &[Suggestion]) {
             s.confidence,
             s.desktop_id.as_deref().unwrap_or("-"),
             format_bytes_human(s.memory_current),
-            s.reason
+            suggestion_reason_text(&s.reason)
         );
     }
 }

@@ -32,7 +32,7 @@ mod tests {
             fields: std::collections::BTreeMap::new(),
             source_content: String::new(),
         };
-        let out = super::resolve_alias_candidate("firefox.desktop", &[entry.clone()]);
+        let out = super::resolve_alias_candidate("firefox.desktop", std::slice::from_ref(&entry));
         assert_eq!(out.map(|v| v.desktop_id), Some(entry.desktop_id));
     }
 

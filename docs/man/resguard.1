@@ -68,6 +68,13 @@ Default mode prints one snapshot; with
 it refreshes continuously.
 
 .TP
+.B tree [--scopes <n>] [--plain]
+Show slice/cgroup structure:
+.I system.slice ,
+.I user.slice ,
+resguard class slices, and notable scopes per class.
+
+.TP
 .B top [--scopes <n>] [--plain]
 Show class-oriented runtime visibility:
 slice/class, current memory, configured/live limits, CPU weight,
@@ -181,6 +188,7 @@ resguard init --dry-run
 resguard setup
 resguard monitor
 resguard monitor --watch --interval 1000
+resguard tree
 resguard suggest --dry-run
 resguard suggest --auto
 resguard init --name demo --out /etc/resguard/profiles/demo.yml --root /tmp/rg

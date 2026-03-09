@@ -13,6 +13,7 @@ pub(crate) mod setup;
 pub(crate) mod status;
 pub(crate) mod suggest;
 pub(crate) mod top;
+pub(crate) mod tree;
 #[cfg(feature = "tui")]
 pub(crate) mod tui;
 pub(crate) mod version;

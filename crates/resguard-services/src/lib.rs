@@ -14,4 +14,5 @@ pub mod run_service;
 pub mod setup_service;
 pub mod suggest_service;
 pub mod top_service;
+pub mod tree_service;
 pub mod tui_service;

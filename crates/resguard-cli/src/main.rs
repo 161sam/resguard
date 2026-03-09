@@ -150,6 +150,9 @@ fn main() {
                 plain,
                 cli.no_color,
             ),
+            CliCommands::Tree { scopes, plain } => {
+                commands::tree::run(&cli.format, scopes, plain, cli.no_color)
+            }
             #[cfg(feature = "tui")]
             CliCommands::Tui { interval, no_top } => {
                 commands::tui::handle_tui(&cli.config_dir, &cli.state_dir, interval, no_top)

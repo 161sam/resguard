@@ -368,6 +368,33 @@ Exit (One-shot):
 
 ---
 
+## `resguard tree`
+Textuelle Cgroup-/Slice-Strukturansicht.
+
+Syntax:
+
+- `resguard tree [--scopes <n>] [--plain]`
+
+Zeigt:
+
+- `system.slice`
+- `user.slice`
+- gefundene `resguard-*.slice` Klassen
+- notable Scopes innerhalb jeder Klasse (default: 3)
+
+Modi:
+
+- Default: kompakte Baumansicht für Menschen
+- `--plain`: script-sichere Key/Value-Zeilen
+- `--format json|yaml`: strukturierter Snapshot
+
+Exit:
+
+- `0` bei vollständiger Sicht
+- `1` bei Teilinformationen
+
+---
+
 ## `resguard tui` (Feature `tui`)
 Syntax:
 

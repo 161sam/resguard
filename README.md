@@ -10,6 +10,7 @@ Implementiert:
 - `init`, `apply`, `rollback`, `run`, `status`
 - `top` für klassenorientierte Live-Sicht (Memory/Limits/Scopes)
 - `monitor` für Pressure + Klassenverhalten (one-shot oder live)
+- `tree` für Slice-/Scope-Strukturübersicht
 - `suggest` mit confidence-threshold, `--apply` und sicherem `--auto`
 - `desktop list`, `desktop wrap`, `desktop unwrap`, `desktop doctor`
 - optionales `resguardd` mit services-basierter Autopilot-Ausführung (`observe -> decide -> act`)
@@ -111,6 +112,7 @@ systemctl cat resguardd.service
 resguard doctor
 sudo resguard setup
 resguard monitor
+resguard tree
 resguard suggest
 resguard suggest --auto
 ```

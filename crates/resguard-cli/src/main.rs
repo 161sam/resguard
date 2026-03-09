@@ -129,6 +129,19 @@ fn main() {
             }
             CliCommands::Doctor => commands::doctor::run(&cli.root, &cli.state_dir),
             CliCommands::Metrics => commands::metrics::run(),
+            CliCommands::Monitor {
+                watch,
+                interval,
+                plain,
+            } => commands::monitor::run(
+                &cli.format,
+                &cli.config_dir,
+                &cli.state_dir,
+                watch,
+                interval,
+                plain,
+                cli.no_color,
+            ),
             CliCommands::Top { scopes, plain } => commands::top::run(
                 &cli.format,
                 &cli.config_dir,

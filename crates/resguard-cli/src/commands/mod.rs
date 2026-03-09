@@ -3,6 +3,7 @@ pub(crate) mod daemon;
 pub(crate) mod desktop;
 pub(crate) mod doctor;
 pub(crate) mod metrics;
+pub(crate) mod monitor;
 pub(crate) mod panic;
 pub(crate) mod profile;
 pub(crate) mod rescue;

@@ -86,6 +86,18 @@ pub enum Commands {
     },
     Doctor,
     Metrics,
+    Monitor {
+        #[arg(long, help = "Live refresh mode")]
+        watch: bool,
+        #[arg(
+            long,
+            default_value_t = 1000,
+            help = "Refresh interval in milliseconds"
+        )]
+        interval: u64,
+        #[arg(long, help = "Plain script-safe output (no ANSI color)")]
+        plain: bool,
+    },
     Top {
         #[arg(
             long,

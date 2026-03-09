@@ -9,6 +9,7 @@ Implementiert:
 - Profilschema + Validation
 - `init`, `apply`, `rollback`, `run`, `status`
 - `top` für klassenorientierte Live-Sicht (Memory/Limits/Scopes)
+- `monitor` für Pressure + Klassenverhalten (one-shot oder live)
 - `suggest` mit confidence-threshold, `--apply` und sicherem `--auto`
 - `desktop list`, `desktop wrap`, `desktop unwrap`, `desktop doctor`
 - optionales `resguardd` mit services-basierter Autopilot-Ausführung (`observe -> decide -> act`)
@@ -109,6 +110,7 @@ systemctl cat resguardd.service
 ```bash
 resguard doctor
 sudo resguard setup
+resguard monitor
 resguard suggest
 resguard suggest --auto
 ```

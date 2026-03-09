@@ -340,6 +340,34 @@ Exit:
 
 ---
 
+## `resguard monitor`
+Live Pressure-/Ressourcen-Überblick für laufende Systeme.
+
+Syntax:
+
+- One-shot: `resguard monitor`
+- Live: `resguard monitor --watch [--interval <ms>]`
+- Script-safe: `resguard monitor --plain`
+
+Mindestausgabe:
+
+- CPU/MEM/IO Pressure (`avg10`, `avg60`)
+- Klassen-Slice-Verhalten (`class`, `slice`, `source`, `current`, `high`, `max`, `cpu`)
+- letzte Daemon/Autopilot-Aktivitäten (falls `${state_dir}/daemon-ledger.jsonl` verfügbar)
+
+Modi:
+
+- One-shot liefert einmalige Snapshot-Ausgabe
+- `--watch` aktualisiert fortlaufend
+- `--plain` liefert ANSI-freie, script-freundliche Key/Value-Zeilen
+
+Exit (One-shot):
+
+- `0` bei vollständiger Kernsicht
+- `1` wenn Kerninformationen fehlen
+
+---
+
 ## `resguard tui` (Feature `tui`)
 Syntax:
 

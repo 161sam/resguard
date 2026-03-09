@@ -112,6 +112,13 @@ sudo resguard setup
 resguard suggest
 ```
 
+`resguard setup` ist der Zero-Config-Entrypoint:
+
+- erzeugt/aktualisiert das Auto-Profil
+- führt standardmäßig `apply` aus
+- zeigt sichere Suggest-Preview mit Auto-Wrap-Plan nur für starke Matches
+- lässt mehrdeutige Fälle bewusst als manuelle Review-Hinweise stehen
+
 Optional Desktop-Wrap (Beispiel):
 
 ```bash

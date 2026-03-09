@@ -28,6 +28,13 @@ and
 (\fIresguard-rescue.slice\fR).
 
 .TP
+.B setup [--name <profile>] [--apply <true|false>] [--suggest <true|false>] [--plan-wraps <true|false>]
+Zero-config bootstrap for common desktop systems:
+creates/updates an auto profile, applies it, and runs a safe suggest preview.
+Only strong-confidence desktop matches are planned for auto-wrap;
+ambiguous matches stay manual review hints.
+
+.TP
 .B apply <profile>
 Apply a profile by writing managed systemd drop-ins and slice units.
 Supports dry-run and rollback-aware transactional behavior.
@@ -156,6 +163,7 @@ Disable colorized output.
 .SH EXAMPLES
 .nf
 resguard init --dry-run
+resguard setup
 resguard init --name demo --out /etc/resguard/profiles/demo.yml --root /tmp/rg
 resguard apply demo --dry-run --root /tmp/rg
 resguard apply demo --root /tmp/rg

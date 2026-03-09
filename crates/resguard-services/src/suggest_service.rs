@@ -53,6 +53,17 @@ enum SuggestPlanItem {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SuggestPreviewSummary {
+    pub total: usize,
+    pub strong_auto_wrap: usize,
+    pub strong_manual_review: usize,
+    pub low_confidence: usize,
+    pub planned_wraps: Vec<String>,
+    pub manual_review_hints: Vec<String>,
+    pub warnings: Vec<String>,
+}
+
 pub fn suggest<RP, WD>(
     req: SuggestRequest,
     resolve_profile: RP,
@@ -139,6 +150,100 @@ where
     }
 
     Ok(0)
+}
+
+pub fn suggest_preview_summary<RP>(
+    req: &SuggestRequest,
+    resolve_profile: RP,
+) -> Result<SuggestPreviewSummary>
+where
+    RP: FnOnce() -> Result<(Option<String>, Option<Profile>)>,
+{
+    if req.apply {
+        return Err(anyhow!(
+            "invalid setup preview request: apply must be false for preview summary"
+        ));
+    }
+    if let Err(msg) = validate_confidence_threshold(req.confidence_threshold) {
+        return Err(anyhow!(msg));
+    }
+
+    let (resolved_profile_name, resolved_profile) = resolve_profile()?;
+    let mut rules = Vec::new();
+    if let Some(p) = &resolved_profile {
+        if let Some(cfg) = &p.spec.suggest {
+            for r in &cfg.rules {
+                rules.push(r.clone());
+            }
+        }
+    }
+    rules.extend(default_suggest_rules());
+
+    let observations = match observe_active_scopes() {
+        Ok(v) => v,
+        Err(err) => {
+            return Ok(SuggestPreviewSummary {
+                warnings: vec![format!("could not query user scopes: {err}")],
+                ..SuggestPreviewSummary::default()
+            });
+        }
+    };
+    let desktop_by_exec = build_desktop_exec_index();
+    let suggestions = build_suggestions(&observations, &rules, &desktop_by_exec);
+    let profile_hint = resolved_profile_name.as_deref().unwrap_or("<profile>");
+    Ok(summarize_plan_items(&build_plan_items(
+        &suggestions,
+        req.confidence_threshold,
+        profile_hint,
+    )))
+}
+
+fn summarize_plan_items(items: &[SuggestPlanItem]) -> SuggestPreviewSummary {
+    let mut out = SuggestPreviewSummary {
+        total: items.len(),
+        ..SuggestPreviewSummary::default()
+    };
+
+    for item in items {
+        match item {
+            SuggestPlanItem::SkipLowConfidence {
+                scope,
+                class,
+                confidence,
+                threshold,
+                confidence_reason,
+            } => {
+                out.low_confidence += 1;
+                out.manual_review_hints.push(format!(
+                    "{scope} -> {class}: confidence {confidence} below threshold {threshold} ({confidence_reason})"
+                ));
+            }
+            SuggestPlanItem::WrapDesktop {
+                desktop_id,
+                class,
+                confidence,
+                confidence_reason,
+            } => {
+                out.strong_auto_wrap += 1;
+                out.planned_wraps.push(format!(
+                    "{desktop_id} -> {class} (confidence={confidence}, reason={confidence_reason})"
+                ));
+            }
+            SuggestPlanItem::ManualWrap {
+                scope,
+                class,
+                confidence,
+                confidence_reason,
+                ..
+            } => {
+                out.strong_manual_review += 1;
+                out.manual_review_hints.push(format!(
+                    "{scope} -> {class}: strong match but no unique desktop id (confidence={confidence}, reason={confidence_reason})"
+                ));
+            }
+        }
+    }
+    out
 }
 
 fn observe_active_scopes() -> Result<Vec<ScopeObservation>> {
@@ -401,7 +506,8 @@ fn print_suggestions_table(items: &[Suggestion], threshold: u8) {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_plan_items, build_suggestions, execute_plan_items, ScopeObservation, SuggestPlanItem,
+        build_plan_items, build_suggestions, execute_plan_items, summarize_plan_items,
+        ScopeObservation, SuggestPlanItem,
     };
     use resguard_model::SuggestRule;
     use std::collections::HashMap;
@@ -647,5 +753,39 @@ mod tests {
                 class: "heavy".to_string(),
             },
         ]
+    }
+
+    #[test]
+    fn setup_summary_counts_wrap_manual_and_low_confidence() {
+        let items = vec![
+            SuggestPlanItem::WrapDesktop {
+                desktop_id: "firefox_firefox.desktop".to_string(),
+                class: "browsers".to_string(),
+                confidence: 90,
+                confidence_reason: "strong".to_string(),
+            },
+            SuggestPlanItem::ManualWrap {
+                scope: "app-jetbrains.scope".to_string(),
+                class: "ide".to_string(),
+                confidence: 85,
+                confidence_reason: "strong".to_string(),
+                filter_hint: "idea".to_string(),
+                profile_hint: "auto".to_string(),
+            },
+            SuggestPlanItem::SkipLowConfidence {
+                scope: "app-random.scope".to_string(),
+                class: "heavy".to_string(),
+                confidence: 40,
+                threshold: 70,
+                confidence_reason: "weak".to_string(),
+            },
+        ];
+        let summary = summarize_plan_items(&items);
+        assert_eq!(summary.total, 3);
+        assert_eq!(summary.strong_auto_wrap, 1);
+        assert_eq!(summary.strong_manual_review, 1);
+        assert_eq!(summary.low_confidence, 1);
+        assert_eq!(summary.planned_wraps.len(), 1);
+        assert_eq!(summary.manual_review_hints.len(), 2);
     }
 }

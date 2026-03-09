@@ -117,8 +117,10 @@ pub(crate) enum Commands {
         name: Option<String>,
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         apply: bool,
-        #[arg(long)]
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         suggest: bool,
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        plan_wraps: bool,
     },
     Apply {
         profile: String,
@@ -575,8 +577,11 @@ pub(crate) fn handle_setup(
     name: Option<String>,
     apply: bool,
     suggest: bool,
+    plan_wraps: bool,
 ) -> Result<i32> {
-    commands::setup::handle_setup(format, root, config_dir, state_dir, name, apply, suggest)
+    commands::setup::handle_setup(
+        format, root, config_dir, state_dir, name, apply, suggest, plan_wraps,
+    )
 }
 
 pub(crate) fn handle_rollback(

@@ -91,6 +91,36 @@ Exit:
 
 ---
 
+## `resguard setup`
+Syntax:
+
+- `resguard setup [--name <profile>] [--apply <true|false>] [--suggest <true|false>] [--plan-wraps <true|false>]`
+
+Ziel:
+
+- praktischer Zero-Config-Bootstrap für typische Desktop-Workstations
+
+Default-Verhalten:
+
+- erzeugt/aktualisiert Auto-Profil (`auto`, oder `--name`)
+- führt `apply` aus (`--apply` default `true`)
+- führt sichere Suggest-Preview aus (`--suggest` default `true`)
+- zeigt Auto-Wrap-Plan nur für starke Treffer (`--plan-wraps` default `true`)
+
+Sicherheitsmodell:
+
+- nur starke Confidence-Fälle werden als `setup.auto_wrap.plan` ausgegeben
+- mehrdeutige oder schwache Treffer bleiben in `setup.manual_review.hint`
+- kein automatisches Wrap-Schreiben in `setup` selbst; tatsächliche Aktion bleibt explizit über `resguard suggest --apply`
+
+Ausgabe enthält:
+
+- was automatisch vorbereitet wurde (`setup.zero_config=true`)
+- wie viele starke/mehrdeutige/schwache Treffer erkannt wurden
+- konkrete Follow-up Kommandos für Review und manuelle Wraps
+
+---
+
 ## `resguard apply <profile>`
 Flags:
 

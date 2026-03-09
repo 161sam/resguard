@@ -90,6 +90,7 @@ fn main() {
                 name,
                 apply,
                 suggest,
+                plan_wraps,
             } => commands::setup::run(
                 &cli.format,
                 &cli.root,
@@ -98,6 +99,7 @@ fn main() {
                 name,
                 apply,
                 suggest,
+                plan_wraps,
             ),
             CliCommands::Apply {
                 profile,

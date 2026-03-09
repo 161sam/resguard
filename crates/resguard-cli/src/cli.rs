@@ -45,8 +45,20 @@ pub enum Commands {
         name: Option<String>,
         #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
         apply: bool,
-        #[arg(long)]
+        #[arg(
+            long,
+            default_value_t = true,
+            action = clap::ArgAction::Set,
+            help = "Run safe suggest preview after bootstrap"
+        )]
         suggest: bool,
+        #[arg(
+            long,
+            default_value_t = true,
+            action = clap::ArgAction::Set,
+            help = "Plan auto-wrap candidates for strong-confidence matches"
+        )]
+        plan_wraps: bool,
     },
     Apply {
         profile: String,

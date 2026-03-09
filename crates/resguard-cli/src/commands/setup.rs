@@ -1,5 +1,7 @@
 use crate::cli::{ApplyOptions, SuggestRequest};
 use crate::*;
+use resguard_services::setup_service::SetupSuggestSummary;
+use resguard_services::suggest_service::suggest_preview_summary;
 
 pub(crate) fn handle_setup(
     format: &str,
@@ -9,6 +11,7 @@ pub(crate) fn handle_setup(
     name: Option<String>,
     apply: bool,
     suggest: bool,
+    plan_wraps: bool,
 ) -> Result<i32> {
     let profile_name = name.unwrap_or_else(|| "auto".to_string());
 
@@ -16,6 +19,7 @@ pub(crate) fn handle_setup(
         profile_name.clone(),
         apply,
         suggest,
+        plan_wraps,
         |profile_name| {
             let setup_out = profile_path(config_dir, profile_name)?
                 .to_string_lossy()
@@ -47,7 +51,7 @@ pub(crate) fn handle_setup(
             )
         },
         |profile_name| {
-            commands::suggest::handle_suggest(SuggestRequest {
+            let req = SuggestRequest {
                 format: format.to_string(),
                 root: root.to_string(),
                 config_dir: config_dir.to_string(),
@@ -56,6 +60,31 @@ pub(crate) fn handle_setup(
                 apply: false,
                 dry_run: true,
                 confidence_threshold: 70,
+            };
+            let summary = suggest_preview_summary(
+                &resguard_services::suggest_service::SuggestRequest {
+                    format: req.format.clone(),
+                    apply: req.apply,
+                    dry_run: req.dry_run,
+                    confidence_threshold: req.confidence_threshold,
+                },
+                || {
+                    resolve_suggest_profile(
+                        &req.root,
+                        &req.config_dir,
+                        &req.state_dir,
+                        req.profile.as_deref(),
+                    )
+                },
+            )?;
+            Ok(SetupSuggestSummary {
+                total: summary.total,
+                strong_auto_wrap: summary.strong_auto_wrap,
+                strong_manual_review: summary.strong_manual_review,
+                low_confidence: summary.low_confidence,
+                planned_wraps: summary.planned_wraps,
+                manual_review_hints: summary.manual_review_hints,
+                warnings: summary.warnings,
             })
         },
     )
@@ -69,6 +98,9 @@ pub(crate) fn run(
     name: Option<String>,
     apply: bool,
     suggest: bool,
+    plan_wraps: bool,
 ) -> Result<i32> {
-    handle_setup(format, root, config_dir, state_dir, name, apply, suggest)
+    handle_setup(
+        format, root, config_dir, state_dir, name, apply, suggest, plan_wraps,
+    )
 }

@@ -1,5 +1,6 @@
 use crate::alias::resolve_alias_candidate;
 use crate::exec::parse_first_exec_token;
+use crate::flatpak::{flatpak_app_id_from_desktop_id, flatpak_app_name};
 use crate::snap::snap_app_from_desktop_id;
 use crate::xdg::{desktop_scan_dirs, origin_matches, DesktopOrigin};
 use std::collections::BTreeMap;
@@ -180,8 +181,11 @@ pub fn resolve_desktop_id(id: &str) -> ResolutionResult {
         let exec_match =
             parse_first_exec_token(&item.exec).is_some_and(|bin| bin == requested_stem);
         let name_match = item.name.eq_ignore_ascii_case(requested_stem);
+        let flatpak_match = flatpak_app_id_from_desktop_id(&item.desktop_id)
+            .and_then(|app_id| flatpak_app_name(&app_id))
+            .is_some_and(|app| app == requested_stem);
 
-        if stem_match || exec_match || name_match {
+        if stem_match || exec_match || name_match || flatpak_match {
             match hits_by_id.get(&item.desktop_id) {
                 Some(existing) if existing.origin == DesktopOrigin::User => {}
                 _ => {
@@ -346,6 +350,29 @@ mod tests {
         match resolve_desktop_id("firefox.desktop") {
             ResolutionResult::Alias { resolved, .. } => {
                 assert_eq!(resolved.desktop_id, "firefox_firefox.desktop")
+            }
+            other => panic!("unexpected result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn desktop_lookup_resolves_flatpak_alias_by_app_name() {
+        let td = tempdir().expect("tempdir");
+        let home = td.path().join("home");
+        let xdg_home = home.join(".local/share");
+        let flatpak_user = xdg_home.join("flatpak/exports/share/applications");
+        std::fs::create_dir_all(&flatpak_user).expect("mkdir");
+        std::fs::write(
+            flatpak_user.join("org.example.DevWorkbench.desktop"),
+            "[Desktop Entry]\nType=Application\nName=DevWorkbench\nExec=/usr/bin/flatpak run org.example.DevWorkbench\n",
+        )
+        .expect("write");
+        let _g = EnvGuard::set(&home, &xdg_home, Some(std::ffi::OsStr::new("")));
+
+        let got = resolve_desktop_id("devworkbench.desktop");
+        match got {
+            ResolutionResult::Alias { resolved, .. } => {
+                assert_eq!(resolved.desktop_id, "org.example.DevWorkbench.desktop")
             }
             other => panic!("unexpected result: {other:?}"),
         }

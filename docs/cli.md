@@ -385,7 +385,9 @@ Verhalten:
 - zusätzliche Fallback-Systempfade:
   - `/usr/local/share/applications`
   - `/usr/share/applications`
+  - `/var/lib/flatpak/exports/share/applications` (Flatpak)
   - `/var/lib/snapd/desktop/applications` (Ubuntu Snap)
+  - `${XDG_DATA_HOME}/flatpak/exports/share/applications` (user Flatpak)
 
 Hinweis:
 

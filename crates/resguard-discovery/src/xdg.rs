@@ -32,6 +32,12 @@ pub fn desktop_scan_dirs() -> Vec<(PathBuf, DesktopOrigin)> {
             data_home.join("applications"),
             DesktopOrigin::User,
         );
+        push_scan_dir(
+            &mut dirs,
+            &mut seen,
+            data_home.join("flatpak/exports/share/applications"),
+            DesktopOrigin::User,
+        );
     }
 
     if let Some(raw) = std::env::var_os("XDG_DATA_DIRS") {
@@ -51,6 +57,7 @@ pub fn desktop_scan_dirs() -> Vec<(PathBuf, DesktopOrigin)> {
     for path in [
         "/usr/local/share/applications",
         "/usr/share/applications",
+        "/var/lib/flatpak/exports/share/applications",
         "/var/lib/snapd/desktop/applications",
     ] {
         push_scan_dir(

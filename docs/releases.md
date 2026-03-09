@@ -87,6 +87,36 @@ Notes:
 - `release_tag` controls the target GitHub Release tag and expected version.
 - workflows fail if `packaging/deb/control` version from `source_ref` does not match `release_tag` (for example source version `0.3.1` with `release_tag=v0.3.0`).
 
+## GitHub Pages environment requirements
+
+`APT Repository Pages` deploys through the `github-pages` environment (`deploy` job in `.github/workflows/apt-pages.yml`).
+
+Required repository settings:
+
+1. **Pages is enabled** and configured for **GitHub Actions** as source.
+2. Environment `github-pages` exists (or is auto-created) and is not blocking the workflow actor.
+3. If environment protection rules are enabled:
+   - either allow tag refs used for releases (for example `refs/tags/v*`), or
+   - allow the selected branch ref used for manual backfill (recommended: `main`).
+4. Required reviewers (if configured) must approve the deployment run.
+
+If you see:
+
+`Tag "vX.Y.Z" is not allowed to deploy to github-pages due to environment protection rules`
+
+then the release assets can still be published while APT Pages deploy is blocked by environment policy.
+
+Recommended recovery/backfill (safe):
+
+1. Keep `release_tag=vX.Y.Z` so uploaded assets and version checks stay tied to the intended release.
+2. Run `APT Repository Pages` via `workflow_dispatch` with:
+   - `release_tag=vX.Y.Z`
+   - `source_ref=main`
+3. Ensure `main` still contains `packaging/deb/control` version `X.Y.Z` (workflow enforces this).
+4. Approve the environment deployment if reviewers are required.
+
+This preserves version-consistency guarantees while avoiding blocked tag-based Pages deploys.
+
 ## Verification checklist
 
 - `scripts/release.sh --dry-run` succeeds.

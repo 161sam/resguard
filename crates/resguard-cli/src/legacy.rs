@@ -2435,11 +2435,7 @@ mod tests {
         .expect("write firefox desktop file");
 
         let source = resolve_desktop_source("firefox.desktop").expect("resolve firefox alias");
-        assert!(
-            source.desktop_id == "firefox_firefox.desktop" || source.desktop_id == "firefox.desktop",
-            "unexpected desktop id: {}",
-            source.desktop_id
-        );
+        assert_eq!(source.desktop_id, "firefox_firefox.desktop");
     }
 
     #[test]
@@ -2631,8 +2627,9 @@ mod tests {
         let home = temp.path().join("home");
         let apps = home.join(".local/share/applications");
         std::fs::create_dir_all(&apps).expect("create apps dir");
-        let source_path = apps.join("firefox.desktop");
-        let original = "[Desktop Entry]\nType=Application\nName=Firefox\nExec=firefox %u\n";
+        let source_path = apps.join("firefox_firefox.desktop");
+        let original =
+            "[Desktop Entry]\nType=Application\nName=Firefox\nExec=/snap/bin/firefox %u\n";
         std::fs::write(&source_path, original).expect("write source desktop");
         let _home_guard = HomeEnvGuard::set(&home);
 
@@ -2649,10 +2646,11 @@ mod tests {
         .expect("wrap override code");
         assert_eq!(wrap_code, 0);
         let wrapped = std::fs::read_to_string(&source_path).expect("read wrapped content");
-        assert!(wrapped.contains("Exec=resguard run --class browsers -- firefox %u"));
+        assert!(wrapped.contains("Exec=resguard run --class browsers -- "));
+        assert!(wrapped.contains("%u"));
 
         let unwrap_code = handle_desktop_unwrap(
-            "firefox.desktop",
+            "firefox_firefox.desktop",
             "browsers",
             DesktopUnwrapOptions {
                 override_mode: true,

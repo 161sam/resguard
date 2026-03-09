@@ -1,5 +1,6 @@
 use crate::alias::resolve_alias_candidate;
 use crate::exec::parse_first_exec_token;
+use crate::snap::snap_app_from_desktop_id;
 use crate::xdg::{desktop_scan_dirs, origin_matches, DesktopOrigin};
 use std::collections::BTreeMap;
 use std::fs;
@@ -153,6 +154,9 @@ pub fn resolve_desktop_id(id: &str) -> ResolutionResult {
     }
 
     let entries = discover_desktop_entries(DesktopOrigin::All);
+    if let Some(mapped) = resolve_unique_snap_canonical(id, &entries) {
+        return mapped;
+    }
     if let Some(exact) = entries.iter().find(|e| e.desktop_id == id) {
         return ResolutionResult::Exact(exact.clone());
     }
@@ -213,6 +217,29 @@ pub fn resolve_desktop_id(id: &str) -> ResolutionResult {
         None => ResolutionResult::NotFound {
             requested: id.to_string(),
         },
+    }
+}
+
+fn resolve_unique_snap_canonical(id: &str, entries: &[DesktopEntry]) -> Option<ResolutionResult> {
+    let requested_stem = id.strip_suffix(".desktop")?;
+    let mut by_id: BTreeMap<String, DesktopEntry> = BTreeMap::new();
+    for item in entries {
+        if snap_app_from_desktop_id(&item.desktop_id).as_deref() == Some(requested_stem) {
+            by_id.insert(item.desktop_id.clone(), item.clone());
+        }
+    }
+
+    let candidates: Vec<DesktopEntry> = by_id.into_values().collect();
+    match candidates.len() {
+        0 => None,
+        1 => Some(ResolutionResult::Alias {
+            requested: id.to_string(),
+            resolved: candidates[0].clone(),
+        }),
+        _ => Some(ResolutionResult::Ambiguous {
+            requested: id.to_string(),
+            candidates: candidates.iter().map(|v| v.desktop_id.clone()).collect(),
+        }),
     }
 }
 
@@ -298,6 +325,28 @@ mod tests {
     fn desktop_lookup_not_found_is_reported() {
         match resolve_desktop_id("resguard-this-should-not-exist.desktop") {
             ResolutionResult::NotFound { .. } => {}
+            other => panic!("unexpected result: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn desktop_lookup_prefers_snap_canonical_for_firefox_alias() {
+        let temp = tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let xdg_home = temp.path().join("xdg-home");
+        let _env = EnvGuard::set(&home, &xdg_home, Some(OsStr::new("")));
+        let apps = xdg_home.join("applications");
+        std::fs::create_dir_all(&apps).expect("create app dir");
+        std::fs::write(
+            apps.join("firefox_firefox.desktop"),
+            "[Desktop Entry]\nType=Application\nName=Firefox\nExec=/snap/bin/firefox %u\n",
+        )
+        .expect("write desktop");
+
+        match resolve_desktop_id("firefox.desktop") {
+            ResolutionResult::Alias { resolved, .. } => {
+                assert_eq!(resolved.desktop_id, "firefox_firefox.desktop")
+            }
             other => panic!("unexpected result: {other:?}"),
         }
     }

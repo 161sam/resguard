@@ -15,6 +15,11 @@ Cargo.lock
 # Build artifacts
 ############################################
 
+release-assets/
+packaging/deb/.build/
+resguard_*_amd64.deb
+resguard_*_amd64_daemon.deb
+
 *.rlib
 *.rmeta
 *.profraw

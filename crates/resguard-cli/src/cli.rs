@@ -97,8 +97,11 @@ pub enum Commands {
         confidence_threshold: u8,
     },
     Run {
-        #[arg(long)]
-        class: String,
+        #[arg(
+            long,
+            help = "Resource class (recommended). If omitted, strong auto-detect is used."
+        )]
+        class: Option<String>,
         #[arg(long)]
         profile: Option<String>,
         #[arg(long)]
@@ -233,7 +236,7 @@ pub struct ApplyOptions {
 
 #[derive(Debug)]
 pub struct RunRequest {
-    pub class: String,
+    pub class: Option<String>,
     pub profile_override: Option<String>,
     pub slice_override: Option<String>,
     pub no_check: bool,

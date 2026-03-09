@@ -149,24 +149,29 @@ Exit:
 
 ---
 
-## `resguard run --class <class> -- <cmd...>`
+## `resguard run [--class <class>] <cmd...>`
 Syntax:
 
-- `resguard run --class <class> [--profile <name>] [--slice <slice>] [--wait] -- <cmd...>`
+- explizit: `resguard run --class <class> [--profile <name>] [--slice <slice>] [--wait] <cmd...>`
+- optional auto-detect: `resguard run [--profile <name>] [--slice <slice>] [--wait] <cmd...>`
 
 Slice-Auflösung:
 
 - `--slice` hat Vorrang
-- sonst Klasse aus Profil:
+- sonst Klasse:
+  - explizit über `--class`, oder
+  - sichere Auto-Erkennung aus Command (nur bei starker Confidence)
+- danach Slice bevorzugt aus Profil:
   - `--profile <name>` oder
   - aktives Profil aus `${state_dir}/state.json`
-- wenn keine aktive Profile-Info vorhanden: Fehler "apply profile first"
+- wenn keine Profil-Info verfügbar oder Klasse im Profil fehlt:
+  - Fallback auf Standard-Slice-Name `resguard-<class>.slice`
 
 Existenzprüfung (hard fail):
 
 - user mode: `systemctl --user cat <slice>`
 - system mode: `systemctl cat <slice>`
-- bei Fehler: Hinweis "apply profile first"
+- bei Fehler: konkrete Hinweise auf `setup/apply` mit copy-paste Befehlen
 
 Mode:
 
@@ -178,6 +183,12 @@ Exec:
 - user: `systemd-run --user --scope -p Slice=<slice> -- <cmd...>`
 - system: `systemd-run --scope -p Slice=<slice> -- <cmd...>`
 - `--wait` fügt `--wait` hinzu und gibt den echten Command-Exitcode zurück
+
+Run-Ausgabe enthält immer:
+
+- `selected.class=<class>`
+- `selected.slice=<slice>`
+- `resolution.source=<...>` (z. B. explizit/profil/auto-detect)
 
 Exit:
 

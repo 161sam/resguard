@@ -169,8 +169,11 @@ pub(crate) enum Commands {
         confidence_threshold: u8,
     },
     Run {
-        #[arg(long)]
-        class: String,
+        #[arg(
+            long,
+            help = "Resource class (recommended). If omitted, strong auto-detect is used."
+        )]
+        class: Option<String>,
         #[arg(long)]
         profile: Option<String>,
         #[arg(long)]
@@ -305,7 +308,7 @@ pub(crate) struct ApplyOptions {
 
 #[derive(Debug)]
 pub(crate) struct RunRequest {
-    pub(crate) class: String,
+    pub(crate) class: Option<String>,
     pub(crate) profile_override: Option<String>,
     pub(crate) slice_override: Option<String>,
     pub(crate) no_check: bool,
@@ -650,116 +653,7 @@ pub(crate) fn handle_run(
     state_dir: &str,
     req: RunRequest,
 ) -> Result<i32> {
-    println!("command=run");
-    println!(
-        "class={} profile={:?} slice={:?} no_check={} wait={} command={:?}",
-        req.class, req.profile_override, req.slice_override, req.no_check, req.wait, req.command
-    );
-
-    let (resolved_slice, source, profile_for_fix) = if let Some(slice) = req.slice_override {
-        (
-            slice,
-            "slice override via --slice".to_string(),
-            req.profile_override,
-        )
-    } else {
-        let rooted_config_dir = resolve_with_root(root, PathBuf::from(config_dir))?;
-        let rooted_state_dir = resolve_with_root(root, PathBuf::from(state_dir))?;
-
-        let (profile_name, profile_source) = if let Some(name) = req.profile_override {
-            (name, "explicit --profile".to_string())
-        } else {
-            let state = read_state(&rooted_state_dir)
-                .map_err(|_| {
-                    anyhow!(
-                        "cannot resolve class '{}': no state found at {}/state.json and no --profile provided",
-                        req.class,
-                        rooted_state_dir.display()
-                    )
-                })?;
-            let active = state.active_profile.ok_or_else(|| {
-                anyhow!(
-                    "cannot resolve class '{}': state at {}/state.json has no activeProfile and no --profile provided",
-                    req.class,
-                    rooted_state_dir.display()
-                )
-            })?;
-            (
-                active,
-                format!(
-                    "activeProfile from {}/state.json",
-                    rooted_state_dir.display()
-                ),
-            )
-        };
-
-        let profile =
-            load_profile_from_store(&rooted_config_dir, &profile_name).map_err(|err| {
-                anyhow!(
-                    "failed to load profile '{profile_name}' from {}: {err}",
-                    rooted_config_dir.display()
-                )
-            })?;
-
-        let slice = resolve_class_slice(&profile, &req.class).ok_or_else(|| {
-            anyhow!(
-                "class '{}' not found in profile '{}' (source: {})",
-                req.class,
-                profile_name,
-                profile_source
-            )
-        })?;
-
-        (
-            slice,
-            format!(
-                "class '{}' from profile '{}' ({})",
-                req.class, profile_name, profile_source
-            ),
-            Some(profile_name),
-        )
-    };
-
-    let user_mode = !is_root_user()?;
-    if !req.no_check {
-        let exists = systemctl_cat_unit(user_mode, &resolved_slice).map_err(|err| {
-            let apply_hint_profile = profile_for_fix
-                .as_deref()
-                .unwrap_or("<profile>");
-            anyhow!(
-                "slice check failed\nexpected slice: {}\nresolution source: {}\nmode: {}\ncheck error: {}\nnext steps:\n  1) sudo resguard apply {}\n  2) systemctl --user daemon-reload",
-                resolved_slice,
-                source,
-                if user_mode { "user" } else { "system" },
-                err,
-                apply_hint_profile
-            )
-        })?;
-        if !exists {
-            let apply_hint_profile = profile_for_fix.as_deref().unwrap_or("<profile>");
-            return Err(anyhow!(
-                "slice not found\nexpected slice: {}\nresolution source: {}\nmode: {}\nnext steps:\n  1) sudo resguard apply {}\n  2) systemctl --user daemon-reload",
-                resolved_slice,
-                source,
-                if user_mode { "user" } else { "system" },
-                apply_hint_profile
-            ));
-        }
-    } else {
-        eprintln!(
-            "warn: skipping slice existence check due to --no-check (unsafe, poweruser mode)"
-        );
-    }
-
-    let code = systemd_run(user_mode, &resolved_slice, req.wait, &req.command)?;
-    if req.wait {
-        return Ok(code);
-    }
-    if code == 0 {
-        Ok(0)
-    } else {
-        Ok(6)
-    }
+    commands::run::run(root, config_dir, state_dir, req)
 }
 
 pub(crate) fn handle_rescue(

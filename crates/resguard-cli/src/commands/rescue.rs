@@ -33,7 +33,7 @@ pub(crate) fn handle_rescue(
                     config_dir,
                     state_dir,
                     RunRequest {
-                        class: "rescue".to_string(),
+                        class: Some("rescue".to_string()),
                         profile_override: None,
                         slice_override: Some(slice_or_class),
                         no_check: true,
@@ -47,7 +47,7 @@ pub(crate) fn handle_rescue(
                     config_dir,
                     state_dir,
                     RunRequest {
-                        class: slice_or_class,
+                        class: Some(slice_or_class),
                         profile_override: None,
                         slice_override: None,
                         no_check: false,

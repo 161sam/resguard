@@ -173,6 +173,19 @@ State/Backups:
 Zusätzlich muss die Slice existieren (Check via `systemctl cat` bzw. `systemctl --user cat`).
 Wenn nicht, bricht `run` mit Hinweis "apply profile first" ab.
 
+Beispiele:
+
+```bash
+resguard run --class heavy cargo build
+resguard run --class browsers firefox
+resguard run firefox
+```
+
+Hinweis zu `resguard run firefox`:
+
+- nur bei starker, sicherer Erkennung wird automatisch eine Klasse gewählt
+- schwache/mehrdeutige Fälle werden abgelehnt und geben konkrete `--class`-Hinweise
+
 ## Status
 
 `status` arbeitet best-effort und kann ohne root ausgeführt werden.

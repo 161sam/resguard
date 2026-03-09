@@ -39,7 +39,7 @@ For each release:
 2. commit version bump:
 
 ```bash
-git add crates/*/Cargo.toml packaging/deb/control
+git add crates/*/Cargo.toml packaging/deb/core/control packaging/deb/daemon/control
 git commit -m "chore(release): cut v<x.y.z>"
 ```
 
@@ -55,7 +55,7 @@ On tag push (`v*`), GitHub Actions runs:
 - `.github/workflows/release-upload.yml`
   - builds:
     - `resguard_<version>_amd64.deb`
-    - `resguard_<version>_amd64_daemon.deb`
+    - `resguard-daemon_<version>_amd64.deb`
     - `SHA256SUMS`
   - uploads/overwrites assets on GitHub Release
 - `.github/workflows/apt-pages.yml`
@@ -69,9 +69,13 @@ On tag push (`v*`), GitHub Actions runs:
 - Core package (`resguard_<version>_amd64.deb`):
   - includes CLI binary `resguard`
   - does not include or auto-enable `resguardd`
-- Optional daemon package (`resguard_<version>_amd64_daemon.deb`):
+- Optional daemon package (`resguard-daemon_<version>_amd64.deb`):
   - includes `resguardd` plus service/config templates
+  - depends on `resguard (= <version>)`
   - still requires explicit operator enable/start
+- APT repository index exposes both installable package names:
+  - `resguard`
+  - `resguard-daemon`
 - TUI remains feature-gated in source builds:
   - build with `cargo build -p resguard --features tui`
   - default release/deb builds do not enable the `tui` feature
@@ -97,7 +101,7 @@ Notes:
 
 - `source_ref` controls which scripts are checked out and executed.
 - `release_tag` controls the target GitHub Release tag and expected version.
-- workflows fail if `packaging/deb/control` version from `source_ref` does not match `release_tag` (for example source version `0.4.1` with `release_tag=v0.4.0`).
+- workflows fail if core/daemon control versions from `source_ref` do not match `release_tag` (for example source version `0.4.1` with `release_tag=v0.4.0`).
 
 ## GitHub Pages environment requirements
 
@@ -124,7 +128,10 @@ Recommended recovery/backfill (safe):
 2. Run `APT Repository Pages` via `workflow_dispatch` with:
    - `release_tag=vX.Y.Z`
    - `source_ref=main`
-3. Ensure `main` still contains `packaging/deb/control` version `X.Y.Z` (workflow enforces this).
+3. Ensure `main` still contains matching versions in:
+   - `packaging/deb/core/control`
+   - `packaging/deb/daemon/control`
+   (workflow enforces this).
 4. Approve the environment deployment if reviewers are required.
 
 This preserves version-consistency guarantees while avoiding blocked tag-based Pages deploys.
@@ -134,3 +141,25 @@ This preserves version-consistency guarantees while avoiding blocked tag-based P
 - `scripts/release.sh --dry-run` succeeds.
 - `scripts/build-deb.sh` validates version consistency across crates and packaging.
 - `release-upload.yml` and `apt-pages.yml` both enforce tag/version consistency.
+- Core/daemon package split sanity:
+  - `RESGUARD_DEB_PACKAGE=core ./scripts/build-deb.sh`
+  - `RESGUARD_DEB_PACKAGE=daemon ./scripts/build-deb.sh`
+  - `dpkg-deb -I resguard_<version>_amd64.deb | grep '^ Package: resguard$'`
+  - `dpkg-deb -I resguard-daemon_<version>_amd64.deb | grep '^ Package: resguard-daemon$'`
+
+## Operator verification after publish
+
+On a target Ubuntu host with the APT source configured:
+
+```bash
+apt policy resguard
+apt policy resguard-daemon
+resguardd --help
+systemctl status resguardd --no-pager
+```
+
+Expected:
+
+- both `resguard` and `resguard-daemon` are listed by `apt policy`
+- `resguardd --help` works once `resguard-daemon` is installed
+- `resguardd` service exists but is not auto-enabled/started by default

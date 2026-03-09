@@ -1,43 +1,47 @@
 # Resguard DEB Packaging
 
-This directory contains Debian packaging assets for `resguard`.
-The package ships `resguardd` assets, but the daemon stays disabled unless explicitly enabled by the operator.
+This directory contains Debian packaging assets for two packages:
+
+- `resguard` (core CLI)
+- `resguard-daemon` (optional daemon package)
 
 ## Install layout
 
-The DEB installs and/or ensures these paths:
+`resguard` installs and/or ensures these paths:
 
 - `/usr/bin/resguard`
-- `/usr/bin/resguardd`
 - `/etc/resguard/`
 - `/etc/resguard/profiles/`
-- `/etc/systemd/system/resguardd.service` (installed by `postinst`)
 - `/var/lib/resguard/`
 - `/usr/share/doc/resguard/`
 
+`resguard-daemon` installs and/or ensures these paths:
+
+- `/usr/bin/resguardd`
+- `/usr/share/resguard-daemon/systemd/resguardd.service`
+- `/usr/share/resguard-daemon/resguardd.yml`
+- `/etc/systemd/system/resguardd.service` (installed by `postinst`)
+- `/etc/resguard/resguardd.yml` (created only if missing)
+
 ## Files
 
-- `packaging/deb/control` - package metadata
-- `packaging/deb/postinst` - installs service/config templates into `/etc`, runs `systemctl daemon-reload`, does not enable/start daemon
-- `packaging/deb/prerm` - best-effort `stop/disable` for `resguardd` on remove/purge
-- `packaging/systemd/resguardd.service` - hardened service unit template
+- `packaging/deb/core/control|postinst|prerm` - core package metadata/scripts
+- `packaging/deb/daemon/control|postinst|prerm` - daemon package metadata/scripts
+- `packaging/systemd/resguardd.service` - service unit template
+- `packaging/etc/resguard/resguardd.yml` - daemon config template
 
 ## Build
 
 ```bash
-./scripts/build-deb.sh
+RESGUARD_DEB_PACKAGE=core ./scripts/build-deb.sh
+RESGUARD_DEB_PACKAGE=daemon ./scripts/build-deb.sh
 ```
 
-Expected output artifact:
+Expected output artifacts:
 
 ```bash
-resguard_0.2.1_amd64.deb
-```
-
-Build CLI-only package (without daemon assets):
-
-```bash
-RESGUARD_DEB_WITH_DAEMON=0 ./scripts/build-deb.sh
+resguard_<version>_amd64.deb
+resguard-daemon_<version>_amd64.deb
 ```
 
 Service enablement remains explicit (`systemctl enable/start` by operator).
@@ -85,6 +89,8 @@ If GitHub auth is unavailable, the script prints the exact remaining `gh secret 
 ## Install
 
 ```bash
-sudo dpkg -i resguard_0.2.1_amd64.deb
+sudo dpkg -i resguard_<version>_amd64.deb
+sudo dpkg -i resguard-daemon_<version>_amd64.deb
 resguard --help
+resguardd --help
 ```

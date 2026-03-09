@@ -54,13 +54,14 @@ jobs:
             exit 1
           fi
           VERSION="${TAG_REF#v}"
-          PKG_VERSION="$(awk -F': ' '/^Version:/ {print $2; exit}' packaging/deb/control)"
-          if [[ -z "$PKG_VERSION" ]]; then
-            echo "failed to read package version from packaging/deb/control" >&2
+          CORE_PKG_VERSION="$(awk -F': ' '/^Version:/ {print $2; exit}' packaging/deb/core/control)"
+          DAEMON_PKG_VERSION="$(awk -F': ' '/^Version:/ {print $2; exit}' packaging/deb/daemon/control)"
+          if [[ -z "$CORE_PKG_VERSION" || -z "$DAEMON_PKG_VERSION" ]]; then
+            echo "failed to read package versions from packaging/deb/{core,daemon}/control" >&2
             exit 1
           fi
-          if [[ "$PKG_VERSION" != "$VERSION" ]]; then
-            echo "version mismatch: release_tag '$TAG_REF' expects '$VERSION' but source_ref '$SOURCE_REF' contains packaging version '$PKG_VERSION'" >&2
+          if [[ "$CORE_PKG_VERSION" != "$VERSION" || "$DAEMON_PKG_VERSION" != "$VERSION" ]]; then
+            echo "version mismatch: release_tag '$TAG_REF' expects '$VERSION' but source_ref '$SOURCE_REF' contains core='$CORE_PKG_VERSION' daemon='$DAEMON_PKG_VERSION'" >&2
             exit 1
           fi
           echo "TAG_REF=$TAG_REF" >> "$GITHUB_ENV"
@@ -71,11 +72,11 @@ jobs:
           set -euo pipefail
           mkdir -p release-assets
 
-          RESGUARD_DEB_WITH_DAEMON=0 ./scripts/build-deb.sh
+          RESGUARD_DEB_PACKAGE=core ./scripts/build-deb.sh
           mv "resguard_${VERSION}_amd64.deb" "release-assets/resguard_${VERSION}_amd64.deb"
 
-          RESGUARD_DEB_WITH_DAEMON=1 ./scripts/build-deb.sh
-          mv "resguard_${VERSION}_amd64.deb" "release-assets/resguard_${VERSION}_amd64_daemon.deb"
+          RESGUARD_DEB_PACKAGE=daemon ./scripts/build-deb.sh
+          mv "resguard-daemon_${VERSION}_amd64.deb" "release-assets/resguard-daemon_${VERSION}_amd64.deb"
 
       - name: Import APT signing key
         env:
@@ -138,6 +139,14 @@ jobs:
             --gpg-homedir "$GNUPGHOME" \
             "${PASS_ARGS[@]}" \
             --export-pubkey ./apt/pubkey.gpg
+
+      - name: Validate APT index contains split packages
+        run: |
+          set -euo pipefail
+          PKG_FILE="apt/dists/stable/main/binary-amd64/Packages"
+          test -s "$PKG_FILE"
+          grep -q '^Package: resguard$' "$PKG_FILE"
+          grep -q '^Package: resguard-daemon$' "$PKG_FILE"
 
       - name: Configure Pages
         uses: actions/configure-pages@v5

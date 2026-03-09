@@ -2,7 +2,7 @@
 
 Resguard ist ein natives Linux-Tool für Ressourcen-Isolation mit systemd slices und cgroups v2.
 
-## Aktueller Stand (v0.3)
+## Aktueller Stand (v0.4)
 
 Implementiert:
 
@@ -46,12 +46,12 @@ curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.4.0/SHA256S
 sha256sum -c SHA256SUMS --ignore-missing
 ```
 
-Optional: Daemon-Variante installieren (enthält zusätzlich `resguardd` + systemd-Service-Template).
+Optional: separates Daemon-Paket installieren (enthält `resguardd` + systemd-Service-Template).
 Der Daemon bleibt nach Installation deaktiviert, bis er explizit aktiviert wird.
 
 ```bash
-curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.4.0/resguard_0.4.0_amd64_daemon.deb"
-sudo apt install -y ./resguard_0.4.0_amd64_daemon.deb
+curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.4.0/resguard-daemon_0.4.0_amd64.deb"
+sudo apt install -y ./resguard-daemon_0.4.0_amd64.deb
 ```
 
 ### Install via APT repository
@@ -82,7 +82,8 @@ Unterschiede:
 
 - GitHub Release Asset: manueller Download und manuelles Upgrade pro Version.
 - APT Repository: einmal einrichten, danach Upgrades über den normalen `apt`-Prozess.
-- `apt install resguard` deckt den Core-Weg ab; optionales `resguardd` weiter über das `_daemon.deb`-Release-Asset installieren.
+- `apt install resguard` deckt den Core-Weg ab.
+- Optionaler Daemon ist ein separates Paket: `resguard-daemon` (Release-Asset oder APT).
 
 Hinweis zur Veröffentlichung:
 
@@ -90,11 +91,16 @@ Hinweis zur Veröffentlichung:
 - Falls das Signing-Secret noch nicht eingerichtet ist, wird nur der GitHub-Release-Upload ausgeführt.
 - Details: [docs/releases.md](docs/releases.md)
 
-Daemon-Validierung nach Installation des optionalen `_daemon.deb`:
+Daemon-Validierung nach Installation des optionalen `resguard-daemon`-Pakets:
 
 ```bash
+apt policy resguard
+apt policy resguard-daemon
+resguardd --help
+systemctl status resguardd --no-pager
 resguard daemon status
 sudo resguardd --once
+systemctl cat resguardd.service
 ```
 
 ## Post-install Quickstart

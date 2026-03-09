@@ -1,0 +1,8 @@
+Package: resguard-daemon
+Version: 0.4.0
+Section: admin
+Priority: optional
+Architecture: amd64
+Maintainer: Resguard Project
+Depends: resguard (= 0.4.0)
+Description: Optional daemon for Resguard adaptive pressure actions

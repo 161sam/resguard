@@ -411,10 +411,3 @@ Wenn **diese drei funktionieren**, kann Resguard wirklich groß werden:
 
 3️⃣ **resguard top**
 → sofort sichtbarer Nutzen
-
----
-
-Wenn du möchtest, kann ich dir auch noch zeigen:
-
-* **welche Architekturänderung Resguard langfristig massiv vereinfachen würde**
-* und **welches einzelne Feature Resguard wirklich viral machen könnte (Developer Community).**

@@ -8,6 +8,9 @@ All notable changes to this project will be documented in this file.
 - TUI visualizer for pressure/slice/cgroup observability.
 - Optional freeze watchdog with guarded panic actions and explicit safety controls.
 
+### Fixed
+- Debian packaging now ships a real separate optional daemon package `resguard-daemon` instead of overloading the `resguard` package artifact.
+
 ## [0.4.0] - 2026-03-09
 
 ### Added

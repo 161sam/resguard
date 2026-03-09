@@ -126,9 +126,11 @@ DIST_DIR="$REPO_DIR/dists/$DIST"
 mkdir -p "$POOL_DIR" "$BINARY_DIR"
 find "$POOL_DIR" -maxdepth 1 -type f -name '*.deb' -delete
 
-mapfile -t DEBS < <(find "$INPUT_DIR" -maxdepth 1 -type f -name "resguard_*_${ARCH}*.deb" | sort)
+mapfile -t DEBS < <(
+  find "$INPUT_DIR" -maxdepth 1 -type f \( -name "resguard_*_${ARCH}.deb" -o -name "resguard-daemon_*_${ARCH}.deb" \) | sort
+)
 if [[ ${#DEBS[@]} -eq 0 ]]; then
-  echo "error: no .deb artifacts found in $INPUT_DIR (expected resguard_*_${ARCH}*.deb)" >&2
+  echo "error: no .deb artifacts found in $INPUT_DIR (expected resguard_*_${ARCH}.deb and/or resguard-daemon_*_${ARCH}.deb)" >&2
   exit 1
 fi
 

@@ -2,7 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONTROL_FILE="$ROOT_DIR/packaging/deb/control"
+CORE_CONTROL_FILE="$ROOT_DIR/packaging/deb/core/control"
+DAEMON_CONTROL_FILE="$ROOT_DIR/packaging/deb/daemon/control"
 RELEASE_ASSETS_DIR="$ROOT_DIR/release-assets"
 
 usage() {
@@ -161,16 +162,16 @@ for file in "${CARGO_TOMLS[@]}"; do
   action "sed -i -E '0,/^version = \"[^\"]+\"/s//version = \"$VERSION\"/' '$file'"
 done
 
-action "sed -i -E 's/^Version: .*/Version: $VERSION/' '$CONTROL_FILE'"
+action "sed -i -E 's/^Version: .*/Version: $VERSION/' '$CORE_CONTROL_FILE'"
+action "sed -i -E 's/^Version: .*/Version: $VERSION/' '$DAEMON_CONTROL_FILE'"
+action "sed -i -E 's/^Depends: resguard \\(= .+\\)$/Depends: resguard (= $VERSION)/' '$DAEMON_CONTROL_FILE'"
 
 echo "running build checks and packaging"
-action "RESGUARD_DEB_WITH_DAEMON=0 '$ROOT_DIR/scripts/build-deb.sh'"
-action "RESGUARD_DEB_WITH_DAEMON=1 '$ROOT_DIR/scripts/build-deb.sh'"
-action "mv -f '$ROOT_DIR/resguard_${VERSION}_amd64.deb' '$ROOT_DIR/resguard_${VERSION}_amd64_daemon.deb'"
-action "RESGUARD_DEB_WITH_DAEMON=0 '$ROOT_DIR/scripts/build-deb.sh'"
+action "RESGUARD_DEB_PACKAGE=core '$ROOT_DIR/scripts/build-deb.sh'"
+action "RESGUARD_DEB_PACKAGE=daemon '$ROOT_DIR/scripts/build-deb.sh'"
 
 CLI_ARTIFACT="resguard_${VERSION}_amd64.deb"
-DAEMON_ARTIFACT="resguard_${VERSION}_amd64_daemon.deb"
+DAEMON_ARTIFACT="resguard-daemon_${VERSION}_amd64.deb"
 CLI_ARTIFACT_PATH="$ROOT_DIR/$CLI_ARTIFACT"
 DAEMON_ARTIFACT_PATH="$ROOT_DIR/$DAEMON_ARTIFACT"
 echo "expected artifacts:"
@@ -182,7 +183,7 @@ stage_release_assets "$CLI_ARTIFACT_PATH" "$DAEMON_ARTIFACT_PATH"
 
 echo
 echo "next tag commands:"
-echo "  git add crates/*/Cargo.toml packaging/deb/control"
+echo "  git add crates/*/Cargo.toml packaging/deb/core/control packaging/deb/daemon/control"
 echo "  git commit -m 'chore(release): cut v$VERSION'"
 echo "  git tag -a v$VERSION -m 'resguard v$VERSION'"
 echo "  git push origin <branch> --follow-tags"

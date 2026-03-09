@@ -572,19 +572,8 @@ pub(crate) fn handle_init(
     Ok(0)
 }
 
-pub(crate) fn handle_setup(
-    format: &str,
-    root: &str,
-    config_dir: &str,
-    state_dir: &str,
-    name: Option<String>,
-    apply: bool,
-    suggest: bool,
-    plan_wraps: bool,
-) -> Result<i32> {
-    commands::setup::handle_setup(
-        format, root, config_dir, state_dir, name, apply, suggest, plan_wraps,
-    )
+pub(crate) fn handle_setup(req: crate::cli::SetupRequest) -> Result<i32> {
+    commands::setup::handle_setup(req)
 }
 
 pub(crate) fn handle_rollback(

@@ -91,16 +91,16 @@ fn main() {
                 apply,
                 suggest,
                 plan_wraps,
-            } => commands::setup::run(
-                &cli.format,
-                &cli.root,
-                &cli.config_dir,
-                &cli.state_dir,
+            } => commands::setup::run(crate::cli::SetupRequest {
+                format: cli.format.clone(),
+                root: cli.root.clone(),
+                config_dir: cli.config_dir.clone(),
+                state_dir: cli.state_dir.clone(),
                 name,
                 apply,
                 suggest,
                 plan_wraps,
-            ),
+            }),
             CliCommands::Apply {
                 profile,
                 dry_run,

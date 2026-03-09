@@ -284,6 +284,18 @@ pub struct SuggestRequest {
     pub confidence_threshold: u8,
 }
 
+#[derive(Debug)]
+pub struct SetupRequest {
+    pub format: String,
+    pub root: String,
+    pub config_dir: String,
+    pub state_dir: String,
+    pub name: Option<String>,
+    pub apply: bool,
+    pub suggest: bool,
+    pub plan_wraps: bool,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct DesktopWrapOptions {
     pub force: bool,

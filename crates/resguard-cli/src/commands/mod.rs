@@ -11,6 +11,7 @@ pub(crate) mod run;
 pub(crate) mod setup;
 pub(crate) mod status;
 pub(crate) mod suggest;
+pub(crate) mod top;
 #[cfg(feature = "tui")]
 pub(crate) mod tui;
 pub(crate) mod version;

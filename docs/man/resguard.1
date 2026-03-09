@@ -54,6 +54,12 @@ Run best-effort diagnostic checks for common setup/runtime issues.
 Show pressure and memory/slice usage metrics from /proc and systemctl.
 
 .TP
+.B top [--scopes <n>] [--plain]
+Show class-oriented runtime visibility:
+slice/class, current memory, configured/live limits, CPU weight,
+and notable active scopes.
+
+.TP
 .B version
 Print CLI version information.
 Matches
@@ -157,6 +163,8 @@ resguard rollback --last --root /tmp/rg
 resguard run --class browsers -- firefox
 resguard rescue
 resguard rescue --command "vmstat 1"
+resguard top
+resguard top --scopes 5 --plain
 resguard desktop list --origin all
 resguard desktop wrap firefox.desktop --class browsers
 resguard desktop doctor

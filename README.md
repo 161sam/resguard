@@ -8,6 +8,7 @@ Implementiert:
 
 - Profilschema + Validation
 - `init`, `apply`, `rollback`, `run`, `status`
+- `top` für klassenorientierte Live-Sicht (Memory/Limits/Scopes)
 - `suggest` mit confidence-threshold und optionalem `--apply`
 - `desktop list`, `desktop wrap`, `desktop unwrap`, `desktop doctor`
 - optionales `resguardd` mit services-basierter Autopilot-Ausführung (`observe -> decide -> act`)
@@ -193,6 +194,17 @@ Bei teilweise fehlenden Informationen gibt der Command Warnungen aus und endet m
 
 ```bash
 cargo run -p resguard -- status
+```
+
+## Top (class visibility)
+
+`top` zeigt pro Resguard-Klasse aktuelle Nutzung, laufende Limits und aktive Scopes.
+
+```bash
+resguard top
+resguard top --scopes 5
+resguard top --plain
+resguard --format json top
 ```
 
 ## TUI usage and feature flag

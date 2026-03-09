@@ -244,6 +244,37 @@ Exit:
 
 ---
 
+## `resguard top`
+Kompakte Klassen-/Slice-Sicht für aktive Workstation-Last.
+
+Syntax:
+
+- `resguard top [--scopes <n>] [--plain]`
+
+Verhalten:
+
+- liest aktives Profil aus `${state_dir}/state.json`
+- zeigt pro Klasse:
+  - Slice-Name und Quelle (`user`/`system`)
+  - `MemoryCurrent`, `MemoryHigh`, `MemoryMax`, `CPUWeight`
+  - konfigurierte Limits aus dem Profil
+  - notable aktive Scopes innerhalb der Klasse (default: 3)
+- bei fehlendem Profil oder nicht sichtbaren Slices:
+  - kompakte Warnung mit nächsten Schritten (`setup/apply`)
+
+Output-Modi:
+
+- `--format table` (default): menschenlesbar, optional farbig (TTY, außer `--no-color`/`NO_COLOR`)
+- `--plain`: script-sicheres Tabellenformat ohne ANSI
+- `--format json|yaml`: strukturierter Snapshot inkl. `partial`/`warnings`
+
+Exit:
+
+- `0` wenn alle Daten vollständig
+- `1` bei Teilinformationen (`partial=true`)
+
+---
+
 ## `resguard tui` (Feature `tui`)
 Syntax:
 

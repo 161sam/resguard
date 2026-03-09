@@ -74,6 +74,16 @@ pub enum Commands {
     },
     Doctor,
     Metrics,
+    Top {
+        #[arg(
+            long,
+            default_value_t = 3,
+            help = "Notable active scopes shown per class"
+        )]
+        scopes: usize,
+        #[arg(long, help = "Plain script-safe output (no ANSI color)")]
+        plain: bool,
+    },
     #[cfg(feature = "tui")]
     Tui {
         #[arg(long, default_value_t = 1000)]

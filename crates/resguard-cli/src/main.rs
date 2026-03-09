@@ -127,6 +127,14 @@ fn main() {
             }
             CliCommands::Doctor => commands::doctor::run(&cli.root, &cli.state_dir),
             CliCommands::Metrics => commands::metrics::run(),
+            CliCommands::Top { scopes, plain } => commands::top::run(
+                &cli.format,
+                &cli.config_dir,
+                &cli.state_dir,
+                scopes,
+                plain,
+                cli.no_color,
+            ),
             #[cfg(feature = "tui")]
             CliCommands::Tui { interval, no_top } => {
                 commands::tui::handle_tui(&cli.config_dir, &cli.state_dir, interval, no_top)

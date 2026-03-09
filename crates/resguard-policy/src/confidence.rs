@@ -16,10 +16,28 @@ pub struct ConfidenceScore {
 
 fn expected_class_for_known_app(app: &str) -> Option<&'static str> {
     let app = app.to_ascii_lowercase();
-    if ["firefox", "chrome", "chromium", "brave", "opera", "vivaldi"].contains(&app.as_str()) {
+    if [
+        "firefox",
+        "chrome",
+        "google-chrome",
+        "google-chrome-stable",
+        "chromium",
+        "chromium-browser",
+        "brave",
+        "opera",
+        "vivaldi",
+    ]
+    .contains(&app.as_str())
+    {
         return Some("browsers");
     }
-    if ["code", "codium", "idea", "pycharm", "clion", "goland"].contains(&app.as_str()) {
+    if [
+        "code", "codium", "vscodium", "idea", "pycharm", "clion", "goland", "webstorm", "rubymine",
+        "phpstorm", "datagrip", "rider",
+    ]
+    .contains(&app.as_str())
+        || app.starts_with("jetbrains")
+    {
         return Some("ide");
     }
     if ["docker", "podman", "containerd"].contains(&app.as_str()) {

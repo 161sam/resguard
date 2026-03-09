@@ -524,6 +524,114 @@ mod tests {
         }));
     }
 
+    #[test]
+    fn zero_config_common_apps_get_practical_defaults() {
+        let observations = vec![
+            ScopeObservation {
+                scope: "app-firefox.scope".to_string(),
+                slice: "app.slice".to_string(),
+                exec_start: "/usr/bin/firefox %u".to_string(),
+                memory_current: 512 * 1024 * 1024,
+                cpu_usage_nsec: 0,
+            },
+            ScopeObservation {
+                scope: "app-chromium.scope".to_string(),
+                slice: "app.slice".to_string(),
+                exec_start: "/usr/bin/google-chrome-stable --new-window".to_string(),
+                memory_current: 512 * 1024 * 1024,
+                cpu_usage_nsec: 0,
+            },
+            ScopeObservation {
+                scope: "app-code.scope".to_string(),
+                slice: "app.slice".to_string(),
+                exec_start: "/usr/bin/code --new-window".to_string(),
+                memory_current: 768 * 1024 * 1024,
+                cpu_usage_nsec: 0,
+            },
+            ScopeObservation {
+                scope: "app-idea.scope".to_string(),
+                slice: "app.slice".to_string(),
+                exec_start: "/opt/idea/bin/idea.sh".to_string(),
+                memory_current: 768 * 1024 * 1024,
+                cpu_usage_nsec: 0,
+            },
+            ScopeObservation {
+                scope: "app-podman.scope".to_string(),
+                slice: "app.slice".to_string(),
+                exec_start: "/usr/bin/podman run ubuntu".to_string(),
+                memory_current: 256 * 1024 * 1024,
+                cpu_usage_nsec: 0,
+            },
+        ];
+
+        let rules = resguard_policy::default_suggest_rules();
+        let desktop_by_exec = HashMap::from([
+            ("firefox".to_string(), vec!["firefox.desktop".to_string()]),
+            ("chromium".to_string(), vec!["chromium.desktop".to_string()]),
+            (
+                "code".to_string(),
+                vec![
+                    "code.desktop".to_string(),
+                    "code-url-handler.desktop".to_string(),
+                ],
+            ),
+            (
+                "idea".to_string(),
+                vec![
+                    "jetbrains-idea.desktop".to_string(),
+                    "intellij-idea-ultimate.desktop".to_string(),
+                ],
+            ),
+        ]);
+
+        let suggestions = build_suggestions(&observations, &rules, &desktop_by_exec);
+        let plan = build_plan_items(&suggestions, 70, "auto");
+
+        assert!(plan.iter().any(|p| {
+            matches!(
+                p,
+                SuggestPlanItem::WrapDesktop {
+                    desktop_id,
+                    class,
+                    ..
+                } if desktop_id == "firefox.desktop" && class == "browsers"
+            )
+        }));
+        assert!(plan.iter().any(|p| {
+            matches!(
+                p,
+                SuggestPlanItem::WrapDesktop {
+                    desktop_id,
+                    class,
+                    ..
+                } if desktop_id == "chromium.desktop" && class == "browsers"
+            )
+        }));
+        assert!(plan.iter().any(|p| {
+            matches!(
+                p,
+                SuggestPlanItem::WrapDesktop {
+                    desktop_id,
+                    class,
+                    ..
+                } if desktop_id == "code.desktop" && class == "ide"
+            )
+        }));
+        assert!(suggestions
+            .iter()
+            .any(|s| s.scope == "app-idea.scope" && s.class == "ide"));
+        assert!(plan.iter().any(|p| {
+            matches!(
+                p,
+                SuggestPlanItem::SkipLowConfidence { scope, class, .. }
+                if scope == "app-idea.scope" && class == "ide"
+            )
+        }));
+        assert!(suggestions
+            .iter()
+            .any(|s| s.scope == "app-podman.scope" && s.class == "heavy"));
+    }
+
     fn default_rules() -> Vec<SuggestRule> {
         vec![
             SuggestRule {
@@ -531,8 +639,12 @@ mod tests {
                 class: "browsers".to_string(),
             },
             SuggestRule {
-                pattern: "(?i)code|codium|idea|pycharm|clion|goland".to_string(),
+                pattern: "(?i)code|codium|idea|pycharm|clion|goland|jetbrains".to_string(),
                 class: "ide".to_string(),
+            },
+            SuggestRule {
+                pattern: "(?i)docker|podman|containerd".to_string(),
+                class: "heavy".to_string(),
             },
         ]
     }

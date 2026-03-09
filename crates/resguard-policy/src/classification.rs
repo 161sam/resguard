@@ -62,9 +62,17 @@ pub fn classify(input: &ClassificationInput, rules: &[SuggestRule]) -> Option<Cl
     }
     if h.contains("code")
         || h.contains("codium")
+        || h.contains("vscodium")
+        || h.contains("jetbrains")
         || h.contains("idea")
         || h.contains("pycharm")
         || h.contains("clion")
+        || h.contains("goland")
+        || h.contains("webstorm")
+        || h.contains("rubymine")
+        || h.contains("phpstorm")
+        || h.contains("datagrip")
+        || h.contains("rider")
     {
         return Some(ClassMatch {
             class: "ide".to_string(),
@@ -78,7 +86,9 @@ pub fn classify(input: &ClassificationInput, rules: &[SuggestRule]) -> Option<Cl
     if input.slice == "app.slice" && input.memory_current >= 2 * gib {
         if h.contains("firefox")
             || h.contains("chrome")
+            || h.contains("google-chrome")
             || h.contains("chromium")
+            || h.contains("chromium-browser")
             || h.contains("brave")
         {
             return Some(ClassMatch {

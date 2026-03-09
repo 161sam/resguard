@@ -49,9 +49,5 @@ pub(crate) fn run(root: &str, config_dir: &str, state_dir: &str, req: RunRequest
         );
     }
 
-    execute_run_plan(
-        &plan,
-        |user_mode, slice| systemctl_cat_unit(user_mode, slice),
-        |user_mode, slice, wait, command| systemd_run(user_mode, slice, wait, command),
-    )
+    execute_run_plan(&plan, systemctl_cat_unit, systemd_run)
 }

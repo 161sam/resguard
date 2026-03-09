@@ -128,7 +128,9 @@ fn main() {
             CliCommands::Doctor => commands::doctor::run(&cli.root, &cli.state_dir),
             CliCommands::Metrics => commands::metrics::run(),
             #[cfg(feature = "tui")]
-            CliCommands::Tui { interval, no_top } => commands::tui::handle_tui(interval, no_top),
+            CliCommands::Tui { interval, no_top } => {
+                commands::tui::handle_tui(&cli.config_dir, &cli.state_dir, interval, no_top)
+            }
             CliCommands::Panic { duration } => commands::panic::run(&cli.root, duration),
             CliCommands::Status => commands::status::run(&cli.root, &cli.state_dir),
             CliCommands::Suggest {

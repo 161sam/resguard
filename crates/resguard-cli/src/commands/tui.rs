@@ -23,84 +23,16 @@ use ratatui::widgets::{Block, Borders, Cell, Gauge, Paragraph, Row, Table};
 use ratatui::Terminal;
 
 #[cfg(feature = "tui")]
-#[derive(Debug, Clone)]
-struct TuiRow {
-    unit: String,
-    memory_current: u64,
-}
+use resguard_services::tui_service::{
+    collect_tui_snapshot, TuiClassSlice, TuiLedgerAction, TuiSnapshot,
+};
 
 #[cfg(feature = "tui")]
-#[derive(Debug, Clone, Default)]
-struct TuiSnapshot {
-    cpu_avg10: Option<f64>,
-    cpu_avg60: Option<f64>,
-    mem_avg10: Option<f64>,
-    mem_avg60: Option<f64>,
-    io_avg10: Option<f64>,
-    io_avg60: Option<f64>,
-    mem_total: Option<u64>,
-    mem_available: Option<u64>,
-    user_slice_current: Option<u64>,
-    user_slice_max: Option<u64>,
-    top_units: Vec<TuiRow>,
-}
-
-#[cfg(feature = "tui")]
-fn collect_tui_snapshot() -> TuiSnapshot {
-    let mut snap = TuiSnapshot::default();
-
-    if let Ok(Some(v)) = read_pressure("/proc/pressure/cpu") {
-        snap.cpu_avg10 = Some(v.avg10);
-        snap.cpu_avg60 = Some(v.avg60);
+fn pressure_pair(v: Option<resguard_model::PressureSnapshot>) -> (String, String) {
+    match v {
+        Some(p) => (format!("{:.2}", p.avg10), format!("{:.2}", p.avg60)),
+        None => ("-".to_string(), "-".to_string()),
     }
-    if let Ok(Some(v)) = read_pressure("/proc/pressure/memory") {
-        snap.mem_avg10 = Some(v.avg10);
-        snap.mem_avg60 = Some(v.avg60);
-    }
-    if let Ok(Some(v)) = read_pressure("/proc/pressure/io") {
-        snap.io_avg10 = Some(v.avg10);
-        snap.io_avg60 = Some(v.avg60);
-    }
-
-    snap.mem_total = read_mem_total_bytes().ok();
-    snap.mem_available = read_mem_available_bytes().ok();
-
-    if let Ok(props) = systemctl_show_props(false, "user.slice", &["MemoryCurrent", "MemoryMax"]) {
-        snap.user_slice_current = parse_prop_u64(&props, "MemoryCurrent");
-        snap.user_slice_max = parse_prop_u64(&props, "MemoryMax");
-    }
-
-    let mut units = Vec::new();
-    for unit_type in ["slice", "scope"] {
-        if let Ok(list) = systemctl_list_units(false, unit_type) {
-            for unit in list {
-                if !unit.ends_with(".slice") && !unit.ends_with(".scope") {
-                    continue;
-                }
-                if let Ok(props) = systemctl_show_props(false, &unit, &["MemoryCurrent"]) {
-                    if let Some(cur) = parse_prop_u64(&props, "MemoryCurrent") {
-                        if cur > 0 {
-                            units.push(TuiRow {
-                                unit,
-                                memory_current: cur,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
-    units.sort_by(|a, b| b.memory_current.cmp(&a.memory_current));
-    units.dedup_by(|a, b| a.unit == b.unit);
-    snap.top_units = units.into_iter().take(10).collect();
-
-    snap
-}
-
-#[cfg(feature = "tui")]
-fn opt_f64(v: Option<f64>) -> String {
-    v.map(|x| format!("{x:.2}"))
-        .unwrap_or_else(|| "-".to_string())
 }
 
 #[cfg(feature = "tui")]
@@ -109,47 +41,91 @@ fn opt_bytes(v: Option<u64>) -> String {
 }
 
 #[cfg(feature = "tui")]
+fn class_limit_text(v: Option<&str>) -> String {
+    if let Some(s) = v {
+        s.to_string()
+    } else {
+        "-".to_string()
+    }
+}
+
+#[cfg(feature = "tui")]
+fn action_text(action: &TuiLedgerAction) -> String {
+    if action.actions.is_empty() {
+        "-".to_string()
+    } else {
+        action.actions.join(",")
+    }
+}
+
+#[cfg(feature = "tui")]
 fn print_tui_summary(snapshot: &TuiSnapshot, no_top: bool) -> i32 {
     let mut partial = false;
+    let (cpu10, cpu60) = pressure_pair(snapshot.cpu_pressure);
+    let (mem10, mem60) = pressure_pair(snapshot.memory_pressure);
+    let (io10, io60) = pressure_pair(snapshot.io_pressure);
+
     println!("mode=summary non_tty=true");
     println!(
         "psi cpu(avg10/avg60)={}/{} mem(avg10/avg60)={}/{} io(avg10/avg60)={}/{}",
-        opt_f64(snapshot.cpu_avg10),
-        opt_f64(snapshot.cpu_avg60),
-        opt_f64(snapshot.mem_avg10),
-        opt_f64(snapshot.mem_avg60),
-        opt_f64(snapshot.io_avg10),
-        opt_f64(snapshot.io_avg60)
+        cpu10, cpu60, mem10, mem60, io10, io60
     );
-    if snapshot.cpu_avg10.is_none()
-        || snapshot.mem_avg10.is_none()
-        || snapshot.io_avg10.is_none()
-        || snapshot.cpu_avg60.is_none()
-        || snapshot.mem_avg60.is_none()
-        || snapshot.io_avg60.is_none()
+
+    if snapshot.cpu_pressure.is_none()
+        || snapshot.memory_pressure.is_none()
+        || snapshot.io_pressure.is_none()
     {
         partial = true;
     }
 
     println!(
-        "memory total={} available={} user.slice.current={} user.slice.max={}",
-        opt_bytes(snapshot.mem_total),
-        opt_bytes(snapshot.mem_available),
-        opt_bytes(snapshot.user_slice_current),
-        opt_bytes(snapshot.user_slice_max),
+        "memory total={} available={}",
+        opt_bytes(snapshot.mem_total_bytes),
+        opt_bytes(snapshot.mem_available_bytes),
     );
-    if snapshot.mem_total.is_none() || snapshot.mem_available.is_none() {
+    if snapshot.mem_total_bytes.is_none() || snapshot.mem_available_bytes.is_none() {
         partial = true;
     }
 
     if !no_top {
-        println!("top_slices");
-        if snapshot.top_units.is_empty() {
+        println!("class_slices");
+        if snapshot.classes.is_empty() {
             println!("unavailable");
             partial = true;
         } else {
-            for row in snapshot.top_units.iter().take(5) {
-                println!("{}\t{}", row.unit, format_bytes_human(row.memory_current));
+            for class_row in snapshot.classes.iter().take(6) {
+                println!(
+                    "class={} slice={} src={} current={} high={} max={} cpu={}",
+                    class_row.class,
+                    class_row.slice,
+                    class_row.source,
+                    opt_bytes(class_row.memory_current),
+                    class_limit_text(class_row.live_memory_high.as_deref()),
+                    class_row.live_memory_max.as_deref().unwrap_or("-"),
+                    class_row
+                        .live_cpu_weight
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".to_string())
+                );
+            }
+        }
+
+        println!("recent_actions");
+        if snapshot.recent_actions.is_empty() {
+            println!("none");
+        } else {
+            for row in &snapshot.recent_actions {
+                println!(
+                    "tick={} decision={} cooldown={} actions={} applied={} warnings={}",
+                    row.tick
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                    row.decision,
+                    row.in_cooldown,
+                    action_text(row),
+                    row.applied.len(),
+                    row.warnings.len(),
+                );
             }
         }
     }
@@ -158,14 +134,71 @@ fn print_tui_summary(snapshot: &TuiSnapshot, no_top: bool) -> i32 {
 }
 
 #[cfg(feature = "tui")]
-pub(crate) fn handle_tui(interval_ms: u64, no_top: bool) -> Result<i32> {
+fn class_rows(snapshot: &TuiSnapshot) -> Vec<Row<'static>> {
+    snapshot
+        .classes
+        .iter()
+        .map(|row: &TuiClassSlice| {
+            Row::new(vec![
+                Cell::from(row.class.clone()),
+                Cell::from(opt_bytes(row.memory_current)),
+                Cell::from(
+                    row.live_memory_high
+                        .clone()
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                Cell::from(
+                    row.live_memory_max
+                        .clone()
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                Cell::from(
+                    row.live_cpu_weight
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                Cell::from(row.source.clone()),
+            ])
+        })
+        .collect()
+}
+
+#[cfg(feature = "tui")]
+fn action_rows(snapshot: &TuiSnapshot) -> Vec<Row<'static>> {
+    snapshot
+        .recent_actions
+        .iter()
+        .map(|row: &TuiLedgerAction| {
+            Row::new(vec![
+                Cell::from(
+                    row.tick
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ),
+                Cell::from(row.decision.clone()),
+                Cell::from(if row.in_cooldown { "yes" } else { "no" }),
+                Cell::from(action_text(row)),
+                Cell::from(row.applied.len().to_string()),
+                Cell::from(row.warnings.len().to_string()),
+            ])
+        })
+        .collect()
+}
+
+#[cfg(feature = "tui")]
+pub(crate) fn handle_tui(
+    config_dir: &str,
+    state_dir: &str,
+    interval_ms: u64,
+    no_top: bool,
+) -> Result<i32> {
     println!("command=tui");
     if interval_ms == 0 {
         return Ok(2);
     }
 
     if !io::stdout().is_terminal() {
-        let snapshot = collect_tui_snapshot();
+        let snapshot = collect_tui_snapshot(config_dir, state_dir);
         return Ok(print_tui_summary(&snapshot, no_top));
     }
 
@@ -183,7 +216,7 @@ pub(crate) fn handle_tui(interval_ms: u64, no_top: bool) -> Result<i32> {
 
         loop {
             if last.elapsed() >= tick {
-                let snapshot = collect_tui_snapshot();
+                let snapshot = collect_tui_snapshot(config_dir, state_dir);
                 terminal.draw(|f| {
                     let area = f.area();
                     let layout = if no_top {
@@ -207,14 +240,13 @@ pub(crate) fn handle_tui(interval_ms: u64, no_top: bool) -> Result<i32> {
                             .split(area)
                     };
 
+                    let (cpu10, cpu60) = pressure_pair(snapshot.cpu_pressure);
+                    let (mem10, mem60) = pressure_pair(snapshot.memory_pressure);
+                    let (io10, io60) = pressure_pair(snapshot.io_pressure);
+
                     let psi_text = format!(
                         "CPU avg10={} avg60={}   MEM avg10={} avg60={}   IO avg10={} avg60={}",
-                        opt_f64(snapshot.cpu_avg10),
-                        opt_f64(snapshot.cpu_avg60),
-                        opt_f64(snapshot.mem_avg10),
-                        opt_f64(snapshot.mem_avg60),
-                        opt_f64(snapshot.io_avg10),
-                        opt_f64(snapshot.io_avg60)
+                        cpu10, cpu60, mem10, mem60, io10, io60
                     );
                     f.render_widget(
                         Paragraph::new(psi_text).block(
@@ -226,20 +258,22 @@ pub(crate) fn handle_tui(interval_ms: u64, no_top: bool) -> Result<i32> {
                     );
 
                     let mem_line = format!(
-                        "MemTotal={}  MemAvailable={}  user.slice MemoryCurrent={}  MemoryMax={}",
-                        opt_bytes(snapshot.mem_total),
-                        opt_bytes(snapshot.mem_available),
-                        opt_bytes(snapshot.user_slice_current),
-                        opt_bytes(snapshot.user_slice_max)
+                        "MemTotal={}  MemAvailable={}  ActiveClassSlices={}  RecentActions={}",
+                        opt_bytes(snapshot.mem_total_bytes),
+                        opt_bytes(snapshot.mem_available_bytes),
+                        snapshot.classes.len(),
+                        snapshot.recent_actions.len(),
                     );
                     f.render_widget(
                         Paragraph::new(mem_line)
-                            .block(Block::default().borders(Borders::ALL).title("Memory")),
+                            .block(Block::default().borders(Borders::ALL).title("System")),
                         layout[1],
                     );
 
-                    let ratio = match (snapshot.user_slice_current, snapshot.user_slice_max) {
-                        (Some(cur), Some(max)) if max > 0 => (cur as f64 / max as f64).min(1.0),
+                    let ratio = match (snapshot.mem_total_bytes, snapshot.mem_available_bytes) {
+                        (Some(total), Some(available)) if total > 0 && available <= total => {
+                            ((total - available) as f64 / total as f64).min(1.0)
+                        }
                         _ => 0.0,
                     };
                     f.render_widget(
@@ -247,7 +281,7 @@ pub(crate) fn handle_tui(interval_ms: u64, no_top: bool) -> Result<i32> {
                             .block(
                                 Block::default()
                                     .borders(Borders::ALL)
-                                    .title("user.slice usage"),
+                                    .title("Memory used (system-wide estimate)"),
                             )
                             .ratio(ratio)
                             .label(format!("{:.0}%", ratio * 100.0)),
@@ -255,25 +289,64 @@ pub(crate) fn handle_tui(interval_ms: u64, no_top: bool) -> Result<i32> {
                     );
 
                     if !no_top {
-                        let header =
-                            Row::new(vec![Cell::from("Unit"), Cell::from("MemoryCurrent")]);
-                        let rows = snapshot.top_units.iter().map(|r| {
-                            Row::new(vec![
-                                Cell::from(r.unit.clone()),
-                                Cell::from(format_bytes_human(r.memory_current)),
-                            ])
-                        });
-                        let table = Table::new(
-                            rows,
-                            [Constraint::Percentage(70), Constraint::Percentage(30)],
+                        let lower = Layout::default()
+                            .direction(Direction::Horizontal)
+                            .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+                            .split(layout[3]);
+
+                        let class_header = Row::new(vec![
+                            Cell::from("Class"),
+                            Cell::from("Current"),
+                            Cell::from("High"),
+                            Cell::from("Max"),
+                            Cell::from("CPUW"),
+                            Cell::from("Src"),
+                        ]);
+                        let class_table = Table::new(
+                            class_rows(&snapshot),
+                            [
+                                Constraint::Length(10),
+                                Constraint::Length(10),
+                                Constraint::Length(10),
+                                Constraint::Length(10),
+                                Constraint::Length(6),
+                                Constraint::Length(6),
+                            ],
                         )
-                        .header(header)
+                        .header(class_header)
                         .block(
                             Block::default()
                                 .borders(Borders::ALL)
-                                .title("Top scopes/slices by MemoryCurrent (q to quit)"),
+                                .title("Class slices (q to quit)"),
                         );
-                        f.render_widget(table, layout[3]);
+                        f.render_widget(class_table, lower[0]);
+
+                        let action_header = Row::new(vec![
+                            Cell::from("Tick"),
+                            Cell::from("Decision"),
+                            Cell::from("CD"),
+                            Cell::from("Actions"),
+                            Cell::from("Applied"),
+                            Cell::from("Warn"),
+                        ]);
+                        let action_table = Table::new(
+                            action_rows(&snapshot),
+                            [
+                                Constraint::Length(6),
+                                Constraint::Length(10),
+                                Constraint::Length(4),
+                                Constraint::Percentage(50),
+                                Constraint::Length(7),
+                                Constraint::Length(5),
+                            ],
+                        )
+                        .header(action_header)
+                        .block(
+                            Block::default()
+                                .borders(Borders::ALL)
+                                .title("Recent daemon/autopilot actions"),
+                        );
+                        f.render_widget(action_table, lower[1]);
                     }
                 })?;
                 last = Instant::now();

@@ -233,6 +233,26 @@ Exit:
 
 ---
 
+## `resguard tui` (Feature `tui`)
+Syntax:
+
+- `resguard tui [--interval <ms>] [--no-top]`
+
+Verhalten:
+
+- interaktive Terminal-Ansicht (mit `--features tui`)
+- zeigt PSI-Überblick (CPU/MEM/IO) und System-Memory
+- zeigt Klassen-Slices aus aktivem Profil mit Live-Werten (wenn verfügbar):
+  - `MemoryCurrent`, `MemoryHigh`, `MemoryMax`, `CPUWeight`
+- zeigt letzte Daemon/Autopilot-Einträge aus `${state_dir}/daemon-ledger.jsonl` (wenn vorhanden)
+- beendet mit `q` oder `Esc`
+
+Non-TTY Fallback:
+
+- wenn `stdout` kein TTY ist, wird automatisch eine einmalige textuelle Summary ausgegeben
+
+---
+
 ## `resguard profile ...`
 Aktuell implementiert:
 

@@ -1105,7 +1105,7 @@ pub(crate) fn handle_metrics() -> Result<i32> {
 
 #[cfg(feature = "tui")]
 pub(crate) fn handle_tui(interval_ms: u64, no_top: bool) -> Result<i32> {
-    commands::tui::handle_tui(interval_ms, no_top)
+    commands::tui::handle_tui("/etc/resguard", "/var/lib/resguard", interval_ms, no_top)
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -185,7 +185,14 @@ cargo run -p resguard --features tui -- tui
 Optionen:
 
 - `--interval <ms>`: Refresh-Intervall (default `1000`)
-- `--no-top`: nur Summary (ohne Top scopes/slices Tabelle)
+- `--no-top`: nur kompakte Summary (ohne Klassen-/Aktionstabellen)
+
+Ansicht (Default):
+
+- PSI Summary (CPU/MEM/IO)
+- Memory Überblick (Total/Available + Nutzungsbalken)
+- Klassen-Slices mit aktuellen Limits/Nutzung (`MemoryCurrent/High/Max`, `CPUWeight`)
+- Letzte Daemon/Autopilot-Aktionen aus `${state_dir}/daemon-ledger.jsonl` (wenn vorhanden)
 
 Non-interactive Fallback:
 

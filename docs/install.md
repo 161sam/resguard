@@ -10,22 +10,22 @@ Resguard bietet zwei offizielle Installationswege:
 Manueller Weg, wenn du eine konkrete Version direkt installieren willst.
 
 ```bash
-curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.3.0/resguard_0.3.0_amd64.deb"
-sudo apt install -y ./resguard_0.3.0_amd64.deb
+curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.4.0/resguard_0.4.0_amd64.deb"
+sudo apt install -y ./resguard_0.4.0_amd64.deb
 ```
 
 Optional: SHA256 prüfen
 
 ```bash
-curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.3.0/SHA256SUMS"
+curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.4.0/SHA256SUMS"
 sha256sum -c SHA256SUMS --ignore-missing
 ```
 
 Optional: Daemon-Variante installieren (zusätzliche `resguardd`-Assets, nicht auto-enabled):
 
 ```bash
-curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.3.0/resguard_0.3.0_amd64_daemon.deb"
-sudo apt install -y ./resguard_0.3.0_amd64_daemon.deb
+curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.4.0/resguard_0.4.0_amd64_daemon.deb"
+sudo apt install -y ./resguard_0.4.0_amd64_daemon.deb
 ```
 
 Upgrade auf neue Versionen erfolgt erneut per Download + Installation.
@@ -81,8 +81,8 @@ Wenn du den optionalen Daemon nutzen willst:
 2. Danach das versionsgleiche Daemon-Asset installieren:
 
 ```bash
-curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.3.0/resguard_0.3.0_amd64_daemon.deb"
-sudo apt install -y ./resguard_0.3.0_amd64_daemon.deb
+curl -fsSLO "https://github.com/161sam/resguard/releases/download/v0.4.0/resguard_0.4.0_amd64_daemon.deb"
+sudo apt install -y ./resguard_0.4.0_amd64_daemon.deb
 ```
 
 Hinweis:
@@ -102,3 +102,14 @@ Erwartung:
 
 - `resguard daemon status` zeigt den aktuellen Service-Zustand.
 - `sudo resguardd --once` läuft einmalig durch (ohne den Service dauerhaft zu starten).
+
+## TUI status (v0.4)
+
+Die TUI ist weiterhin feature-gated und nicht Teil der Standard-Debian-Pakete.
+
+Für TUI-Nutzung aus Source:
+
+```bash
+cargo build -p resguard --features tui
+cargo run -p resguard --features tui -- tui
+```

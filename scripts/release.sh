@@ -72,10 +72,15 @@ fi
 CARGO_TOMLS=(
   "$ROOT_DIR/crates/resguard-cli/Cargo.toml"
   "$ROOT_DIR/crates/resguard-daemon/Cargo.toml"
+  "$ROOT_DIR/crates/resguard-model/Cargo.toml"
+  "$ROOT_DIR/crates/resguard-policy/Cargo.toml"
+  "$ROOT_DIR/crates/resguard-discovery/Cargo.toml"
+  "$ROOT_DIR/crates/resguard-runtime/Cargo.toml"
+  "$ROOT_DIR/crates/resguard-services/Cargo.toml"
   "$ROOT_DIR/crates/resguard-core/Cargo.toml"
-  "$ROOT_DIR/crates/resguard-system/Cargo.toml"
   "$ROOT_DIR/crates/resguard-config/Cargo.toml"
   "$ROOT_DIR/crates/resguard-state/Cargo.toml"
+  "$ROOT_DIR/crates/resguard-system/Cargo.toml"
 )
 
 current_version="$(awk -F' = ' '/^version = / {gsub(/"/, "", $2); print $2; exit}' "${CARGO_TOMLS[0]}")"

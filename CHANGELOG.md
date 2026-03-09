@@ -8,6 +8,20 @@ All notable changes to this project will be documented in this file.
 - TUI visualizer for pressure/slice/cgroup observability.
 - Optional freeze watchdog with guarded panic actions and explicit safety controls.
 
+## [0.4.0] - 2026-03-09
+
+### Added
+- Policy autopilot decision engine with conservative memory/cpu pressure actions and cooldown gating.
+- Runtime adaptive class-limit apply/revert flow with typed operations and no-op handling.
+- Service-level daemon autopilot orchestration (`observe -> decide -> act`) used by `resguardd`.
+- Improved feature-gated TUI view with pressure summary, class slice limits/usage, and recent daemon ledger actions.
+
+### Changed
+- `resguardd` now delegates autopilot logic through services instead of local ad-hoc watchdog logic.
+- Daemon ledger records are structured around tick/decision/actions for clearer operator auditing.
+- Release/install docs now explicitly describe package split: core package vs optional daemon package, and source-only TUI feature status.
+- Packaging metadata/version bumped to `0.4.0`.
+
 ## [0.3.0] - 2026-03-08
 
 ### Added

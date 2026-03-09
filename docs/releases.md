@@ -64,6 +64,18 @@ On tag push (`v*`), GitHub Actions runs:
   - exports `pubkey.gpg`
   - deploys `apt/` to GitHub Pages
 
+## Package matrix (v0.4)
+
+- Core package (`resguard_<version>_amd64.deb`):
+  - includes CLI binary `resguard`
+  - does not include or auto-enable `resguardd`
+- Optional daemon package (`resguard_<version>_amd64_daemon.deb`):
+  - includes `resguardd` plus service/config templates
+  - still requires explicit operator enable/start
+- TUI remains feature-gated in source builds:
+  - build with `cargo build -p resguard --features tui`
+  - default release/deb builds do not enable the `tui` feature
+
 ## Signing secret fallback behavior
 
 If `RESGUARD_APT_GPG_PRIVATE_KEY` is missing:
@@ -74,18 +86,18 @@ If `RESGUARD_APT_GPG_PRIVATE_KEY` is missing:
 
 ## Backfill an existing tag
 
-Use this when a release tag already exists (for example `v0.3.0`) but release/APT assets were not published yet.
+Use this when a release tag already exists (for example `v0.4.0`) but release/APT assets were not published yet.
 
 For each workflow (`Release Upload` and `APT Repository Pages`), run `workflow_dispatch` with:
 
-- `release_tag`: existing tag to publish to (for example `v0.3.0`)
+- `release_tag`: existing tag to publish to (for example `v0.4.0`)
 - `source_ref`: branch/commit containing the publishing automation (default `main`)
 
 Notes:
 
 - `source_ref` controls which scripts are checked out and executed.
 - `release_tag` controls the target GitHub Release tag and expected version.
-- workflows fail if `packaging/deb/control` version from `source_ref` does not match `release_tag` (for example source version `0.3.1` with `release_tag=v0.3.0`).
+- workflows fail if `packaging/deb/control` version from `source_ref` does not match `release_tag` (for example source version `0.4.1` with `release_tag=v0.4.0`).
 
 ## GitHub Pages environment requirements
 

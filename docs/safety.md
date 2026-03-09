@@ -102,20 +102,16 @@ Sicherheitsaspekte:
 
 `resguardd` ist optional und standardmäßig nicht automatisch aktiviert.
 
-### Guardrails gegen Thrash
+### Architektur und Guardrails
 
-- hold/cooldown-gating vor erneuter Aktion
-- konfigurierbares Poll-Intervall (mit Mindestwert)
-- `--once` Modus für einzelnen Entscheidungszyklus ohne Dauerbetrieb
-
-### Revert-Verhalten
-
-Bei Aktion `set-property`:
-
-1. vorherige `user.slice` Properties werden gespeichert (`MemoryHigh`, `MemoryMax`)
-2. temporäre Limits werden gesetzt
-3. nach Ablauf wird Revert ausgeführt
-4. bei SIGINT/SIGTERM während aktiver Aktion: früher Revert-Versuch vor Exit
+- Daemon-Loop folgt `observe -> decide -> act`:
+  - observe: Runtime Snapshot/Pressure
+  - decide: Policy-Autopilot (deterministisch)
+  - act: Runtime adaptive class-limit changes
+- Cooldown-Gating liegt in der Policy und verhindert Thrashing.
+- Konfigurierbares Poll-Intervall (Mindestwert bleibt erzwungen).
+- `--once` Modus bleibt für einzelne Entscheidungszyklen ohne Dauerbetrieb.
+- Ohne aktives Profil bleibt der Daemon im sicheren No-Op.
 
 ### Auditing
 
@@ -126,6 +122,7 @@ Daemon schreibt ein Action-Ledger unter:
 Pro Record:
 
 - timestamp
-- PSI-Werte
-- Aktion/Entscheidung
-- `revert_ok` Status (wenn relevant)
+- tick
+- decision
+- decisionActions/applied/skippedNoop
+- cooldown/profile/warnings Status

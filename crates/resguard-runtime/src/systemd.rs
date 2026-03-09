@@ -170,18 +170,57 @@ pub fn systemctl_set_slice_memory_limits(
     memory_high: &str,
     memory_max: &str,
 ) -> Result<()> {
-    let status = Command::new("systemctl")
-        .arg("set-property")
-        .arg(slice)
-        .arg(format!("MemoryHigh={memory_high}"))
-        .arg(format!("MemoryMax={memory_max}"))
-        .status()?;
+    systemctl_set_slice_limits(false, slice, Some(memory_high), Some(memory_max), None)
+}
+
+pub fn systemctl_set_slice_limits(
+    user: bool,
+    slice: &str,
+    memory_high: Option<&str>,
+    memory_max: Option<&str>,
+    cpu_weight: Option<u16>,
+) -> Result<()> {
+    if memory_high.is_none() && memory_max.is_none() && cpu_weight.is_none() {
+        return Err(anyhow!(
+            "systemctl set-property called without any properties"
+        ));
+    }
+
+    let mut cmd = Command::new("systemctl");
+    if user {
+        cmd.arg("--user");
+    }
+
+    cmd.arg("set-property").arg(slice);
+    if let Some(v) = memory_high {
+        cmd.arg(format!("MemoryHigh={v}"));
+    }
+    if let Some(v) = memory_max {
+        cmd.arg(format!("MemoryMax={v}"));
+    }
+    if let Some(v) = cpu_weight {
+        cmd.arg(format!("CPUWeight={v}"));
+    }
+
+    let status = cmd.status()?;
     if status.success() {
         Ok(())
     } else {
         Err(anyhow!(
             "systemctl set-property failed with status {status}"
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::systemctl_set_slice_limits;
+
+    #[test]
+    fn set_slice_limits_requires_at_least_one_property() {
+        let err = systemctl_set_slice_limits(false, "user.slice", None, None, None)
+            .expect_err("no properties should fail");
+        assert!(err.to_string().contains("without any properties"));
     }
 }
 

@@ -116,7 +116,7 @@ fn print_tui_summary(snapshot: &TuiSnapshot, no_top: bool) -> i32 {
         } else {
             for row in &snapshot.recent_actions {
                 println!(
-                    "tick={} decision={} cooldown={} actions={} applied={} warnings={}",
+                    "tick={} decision={} cooldown={} actions={} applied={} reverted={} warnings={}",
                     row.tick
                         .map(|v| v.to_string())
                         .unwrap_or_else(|| "-".to_string()),
@@ -124,6 +124,7 @@ fn print_tui_summary(snapshot: &TuiSnapshot, no_top: bool) -> i32 {
                     row.in_cooldown,
                     action_text(row),
                     row.applied.len(),
+                    row.reverted.len(),
                     row.warnings.len(),
                 );
             }
@@ -179,6 +180,7 @@ fn action_rows(snapshot: &TuiSnapshot) -> Vec<Row<'static>> {
                 Cell::from(if row.in_cooldown { "yes" } else { "no" }),
                 Cell::from(action_text(row)),
                 Cell::from(row.applied.len().to_string()),
+                Cell::from(row.reverted.len().to_string()),
                 Cell::from(row.warnings.len().to_string()),
             ])
         })
@@ -327,6 +329,7 @@ pub(crate) fn handle_tui(
                             Cell::from("CD"),
                             Cell::from("Actions"),
                             Cell::from("Applied"),
+                            Cell::from("Revert"),
                             Cell::from("Warn"),
                         ]);
                         let action_table = Table::new(
@@ -335,7 +338,8 @@ pub(crate) fn handle_tui(
                                 Constraint::Length(6),
                                 Constraint::Length(10),
                                 Constraint::Length(4),
-                                Constraint::Percentage(50),
+                                Constraint::Percentage(45),
+                                Constraint::Length(7),
                                 Constraint::Length(7),
                                 Constraint::Length(5),
                             ],

@@ -157,6 +157,7 @@ pub struct PressureSnapshot {
 pub struct MetricsSnapshot {
     pub memory_pressure: Option<PressureSnapshot>,
     pub cpu_pressure: Option<PressureSnapshot>,
+    pub io_pressure: Option<PressureSnapshot>,
     pub memory_current_bytes: Option<u64>,
     pub memory_available_bytes: Option<u64>,
     pub cpu_usage_nsec: Option<u64>,

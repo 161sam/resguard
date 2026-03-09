@@ -18,6 +18,14 @@ pub fn cpu_pressure_high_threshold() -> f64 {
     30.0
 }
 
+pub fn io_pressure_high_threshold() -> f64 {
+    20.0
+}
+
 pub fn autopilot_cooldown_ticks() -> u64 {
     3
+}
+
+pub fn autopilot_revert_window_ticks() -> u64 {
+    2
 }

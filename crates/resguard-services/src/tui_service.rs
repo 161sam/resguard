@@ -29,6 +29,7 @@ pub struct TuiLedgerAction {
     pub decision: String,
     pub actions: Vec<String>,
     pub applied: Vec<String>,
+    pub reverted: Vec<String>,
     pub warnings: Vec<String>,
     pub in_cooldown: bool,
 }
@@ -53,6 +54,7 @@ struct LedgerRecordWire {
     #[serde(alias = "decision_actions")]
     decision_actions: Vec<String>,
     applied: Vec<String>,
+    reverted: Vec<String>,
     warnings: Vec<String>,
     #[serde(alias = "in_cooldown")]
     in_cooldown: Option<bool>,
@@ -157,6 +159,7 @@ fn parse_ledger_line(line: &str) -> Option<TuiLedgerAction> {
         decision,
         actions,
         applied: wire.applied,
+        reverted: wire.reverted,
         warnings: wire.warnings,
         in_cooldown: wire.in_cooldown.unwrap_or(false),
     })
@@ -220,12 +223,13 @@ mod tests {
 
     #[test]
     fn parse_ledger_line_supports_new_daemon_format() {
-        let line = r#"{"timestamp":1,"tick":7,"decision":"trigger","decisionActions":["reduce-heavy-cpuweight"],"applied":["user:heavy:resguard-heavy.slice"],"warnings":[],"inCooldown":false}"#;
+        let line = r#"{"timestamp":1,"tick":7,"decision":"trigger","decisionActions":["reduce-heavy-cpuweight"],"applied":["user:heavy:resguard-heavy.slice"],"reverted":[],"warnings":[],"inCooldown":false}"#;
         let row = parse_ledger_line(line).expect("row");
         assert_eq!(row.tick, Some(7));
         assert_eq!(row.decision, "trigger");
         assert_eq!(row.actions, vec!["reduce-heavy-cpuweight".to_string()]);
         assert_eq!(row.applied.len(), 1);
+        assert_eq!(row.reverted.len(), 0);
     }
 
     #[test]

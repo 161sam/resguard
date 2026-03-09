@@ -2,10 +2,12 @@ use anyhow::Result;
 use resguard_config::load_profile_from_store;
 use resguard_core::parse_size_to_bytes;
 use resguard_model::{MetricsSnapshot, Profile};
-use resguard_policy::{decide_autopilot_actions, AutopilotAction, AutopilotState};
+use resguard_policy::{
+    decide_autopilot_actions, AutopilotAction, AutopilotState, AutopilotTransition,
+};
 use resguard_runtime::{
-    apply_class_limit_changes, plan_class_limit_changes, read_system_snapshot, ClassLimitRequest,
-    SystemSnapshot,
+    apply_class_limit_changes, plan_class_limit_changes, read_system_snapshot,
+    revert_class_limit_changes, AdaptiveRevertPlan, ClassLimitRequest, SystemSnapshot,
 };
 use resguard_state::read_state;
 use std::path::Path;
@@ -53,12 +55,15 @@ pub fn daemon_status() -> Result<i32> {
 pub struct DaemonAutopilotState {
     pub tick: u64,
     pub policy: AutopilotState,
+    pub pending_revert: AdaptiveRevertPlan,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct DaemonAutopilotTick {
     pub decision_actions: Vec<String>,
+    pub transition: Option<String>,
     pub applied: Vec<String>,
+    pub reverted: Vec<String>,
     pub skipped_noop: Vec<String>,
     pub warnings: Vec<String>,
     pub in_cooldown: bool,
@@ -77,6 +82,7 @@ pub fn daemon_autopilot_tick(
             let plan = plan_class_limit_changes(requests)?;
             apply_class_limit_changes(&plan)
         },
+        revert_class_limit_changes,
         state,
     )
 }
@@ -85,6 +91,7 @@ fn snapshot_to_metrics(s: &SystemSnapshot) -> MetricsSnapshot {
     MetricsSnapshot {
         memory_pressure: s.memory_pressure,
         cpu_pressure: s.cpu_pressure,
+        io_pressure: s.io_pressure,
         memory_current_bytes: None,
         memory_available_bytes: s.mem_available_bytes,
         cpu_usage_nsec: None,
@@ -180,6 +187,20 @@ fn build_requests(
                     cpu_weight: Some(*cpu_weight),
                 });
             }
+            AutopilotAction::ReduceHeavyIoWeight { io_weight } => {
+                let Some(slice) = class_slice(profile, "heavy") else {
+                    continue;
+                };
+                reqs.push(ClassLimitRequest {
+                    class: "heavy".to_string(),
+                    slice,
+                    user: true,
+                    memory_high: None,
+                    memory_max: None,
+                    cpu_weight: Some(*io_weight),
+                });
+            }
+            AutopilotAction::RevertAdaptiveLimits => {}
             AutopilotAction::PreserveRescueClass => {}
         }
     }
@@ -190,20 +211,24 @@ fn action_name(a: &AutopilotAction) -> String {
     match a {
         AutopilotAction::ReduceBrowsersLimits { .. } => "reduce-browsers-limits".to_string(),
         AutopilotAction::ReduceHeavyCpuWeight { .. } => "reduce-heavy-cpuweight".to_string(),
+        AutopilotAction::ReduceHeavyIoWeight { .. } => "reduce-heavy-ioweight".to_string(),
+        AutopilotAction::RevertAdaptiveLimits => "revert-adaptive-limits".to_string(),
         AutopilotAction::PreserveRescueClass => "preserve-rescue-class".to_string(),
     }
 }
 
-fn daemon_autopilot_tick_with<O, P, A>(
+fn daemon_autopilot_tick_with<O, P, A, R>(
     observe: O,
     load_profile: P,
     apply: A,
+    revert: R,
     state: &mut DaemonAutopilotState,
 ) -> Result<DaemonAutopilotTick>
 where
     O: FnOnce() -> Result<SystemSnapshot>,
     P: FnOnce() -> Result<Option<Profile>>,
     A: FnOnce(&[ClassLimitRequest]) -> Result<resguard_runtime::AdaptiveApplyResult>,
+    R: FnOnce(&AdaptiveRevertPlan) -> Result<resguard_runtime::AdaptiveRevertResult>,
 {
     state.tick = state.tick.saturating_add(1);
     let snap = observe()?;
@@ -222,12 +247,39 @@ where
     state.policy = decision.next_state;
     let mut out = DaemonAutopilotTick {
         decision_actions: decision.actions.iter().map(action_name).collect(),
+        transition: Some(
+            match decision.transition {
+                AutopilotTransition::StayIdle => "stay-idle",
+                AutopilotTransition::TriggerToCooldown => "trigger-to-cooldown",
+                AutopilotTransition::StayCooldown => "stay-cooldown",
+                AutopilotTransition::CooldownToRevertWindow => "cooldown-to-revert-window",
+                AutopilotTransition::RevertWindowToIdle => "revert-window-to-idle",
+            }
+            .to_string(),
+        ),
         in_cooldown: decision.in_cooldown,
         had_profile: true,
         ..DaemonAutopilotTick::default()
     };
 
     if decision.actions.is_empty() {
+        return Ok(out);
+    }
+
+    if decision
+        .actions
+        .iter()
+        .any(|a| matches!(a, AutopilotAction::RevertAdaptiveLimits))
+    {
+        if state.pending_revert.steps.is_empty() {
+            out.warnings
+                .push("revert requested but no pending adaptive changes".to_string());
+            return Ok(out);
+        }
+        let revert_out = revert(&state.pending_revert)?;
+        out.reverted = revert_out.reverted;
+        out.warnings.extend(revert_out.warnings);
+        state.pending_revert = AdaptiveRevertPlan::default();
         return Ok(out);
     }
 
@@ -242,6 +294,7 @@ where
     out.skipped_noop = apply_out.skipped_noop;
     out.warnings.append(&mut warnings);
     out.warnings.extend(apply_out.warnings);
+    state.pending_revert = apply_out.revert_plan;
     Ok(out)
 }
 
@@ -251,7 +304,11 @@ mod tests {
     use resguard_model::{
         ClassSpec, Metadata, PressureSnapshot, Profile, Spec, SystemMemory, UserMemory,
     };
-    use resguard_runtime::{AdaptiveApplyResult, ClassLimitRequest, SystemSnapshot};
+    use resguard_runtime::adaptive::AdaptiveRevertStep;
+    use resguard_runtime::{
+        AdaptiveApplyResult, AdaptiveRevertPlan, AdaptiveRevertResult, ClassLimitRequest,
+        SystemSnapshot,
+    };
     use std::collections::BTreeMap;
 
     fn profile() -> Profile {
@@ -324,6 +381,10 @@ mod tests {
                 avg10: 1.0,
                 avg60: 1.0,
             }),
+            io_pressure: Some(PressureSnapshot {
+                avg10: 1.0,
+                avg60: 1.0,
+            }),
             ..SystemSnapshot::default()
         }
     }
@@ -337,6 +398,10 @@ mod tests {
             cpu_pressure: Some(PressureSnapshot {
                 avg10: 20.0,
                 avg60: 40.0,
+            }),
+            io_pressure: Some(PressureSnapshot {
+                avg10: 20.0,
+                avg60: 30.0,
             }),
             ..SystemSnapshot::default()
         }
@@ -358,6 +423,7 @@ mod tests {
                     revert_plan: resguard_runtime::AdaptiveRevertPlan::default(),
                 })
             },
+            |_plan| Ok(AdaptiveRevertResult::default()),
             &mut state,
         )
         .expect("tick");
@@ -375,6 +441,7 @@ mod tests {
             || Ok(low_snapshot()),
             || Ok(Some(profile())),
             |_reqs| Ok(AdaptiveApplyResult::default()),
+            |_plan| Ok(AdaptiveRevertResult::default()),
             &mut state,
         )
         .expect("tick");
@@ -396,6 +463,7 @@ mod tests {
                     ..AdaptiveApplyResult::default()
                 })
             },
+            |_plan| Ok(AdaptiveRevertResult::default()),
             &mut state,
         )
         .expect("first");
@@ -405,6 +473,7 @@ mod tests {
             || Ok(high_snapshot()),
             || Ok(Some(profile())),
             |_reqs| Ok(AdaptiveApplyResult::default()),
+            |_plan| Ok(AdaptiveRevertResult::default()),
             &mut state,
         )
         .expect("second");
@@ -419,11 +488,118 @@ mod tests {
             || Ok(high_snapshot()),
             || Ok(None),
             |_reqs| Ok(AdaptiveApplyResult::default()),
+            |_plan| Ok(AdaptiveRevertResult::default()),
             &mut state,
         )
         .expect("tick");
         assert!(!out.had_profile);
         assert!(out.decision_actions.is_empty());
         assert!(out.applied.is_empty());
+    }
+
+    #[test]
+    fn io_pressure_action_path_is_visible() {
+        let mut state = DaemonAutopilotState::default();
+        let out = daemon_autopilot_tick_with(
+            || {
+                Ok(SystemSnapshot {
+                    memory_pressure: Some(PressureSnapshot {
+                        avg10: 1.0,
+                        avg60: 1.0,
+                    }),
+                    cpu_pressure: Some(PressureSnapshot {
+                        avg10: 1.0,
+                        avg60: 1.0,
+                    }),
+                    io_pressure: Some(PressureSnapshot {
+                        avg10: 20.0,
+                        avg60: 25.0,
+                    }),
+                    ..SystemSnapshot::default()
+                })
+            },
+            || Ok(Some(profile())),
+            |_reqs| {
+                Ok(AdaptiveApplyResult {
+                    applied: vec!["user:heavy:resguard-heavy.slice".to_string()],
+                    ..AdaptiveApplyResult::default()
+                })
+            },
+            |_plan| Ok(AdaptiveRevertResult::default()),
+            &mut state,
+        )
+        .expect("tick");
+
+        assert!(out
+            .decision_actions
+            .iter()
+            .any(|a| a == "reduce-heavy-ioweight"));
+    }
+
+    #[test]
+    fn revert_visibility_is_explicit() {
+        let mut state = DaemonAutopilotState {
+            pending_revert: AdaptiveRevertPlan {
+                steps: vec![AdaptiveRevertStep {
+                    class: "heavy".to_string(),
+                    slice: "resguard-heavy.slice".to_string(),
+                    user: true,
+                    restore_memory_high: None,
+                    restore_memory_max: None,
+                    restore_cpu_weight: Some(90),
+                }],
+            },
+            policy: resguard_policy::AutopilotState {
+                last_action_tick: Some(1),
+                phase: resguard_policy::AutopilotPhase::Cooldown,
+                ..resguard_policy::AutopilotState::default()
+            },
+            tick: 4,
+        };
+
+        let out = daemon_autopilot_tick_with(
+            || Ok(low_snapshot()),
+            || Ok(Some(profile())),
+            |_reqs| Ok(AdaptiveApplyResult::default()),
+            |_plan| {
+                Ok(AdaptiveRevertResult {
+                    reverted: vec!["user:heavy:resguard-heavy.slice".to_string()],
+                    warnings: vec![],
+                })
+            },
+            &mut state,
+        )
+        .expect("tick");
+        assert!(out
+            .decision_actions
+            .iter()
+            .any(|a| a == "revert-adaptive-limits"));
+        assert_eq!(out.reverted.len(), 1);
+    }
+
+    #[test]
+    fn no_op_stability_with_empty_pending_revert_is_safe() {
+        let mut state = DaemonAutopilotState {
+            policy: resguard_policy::AutopilotState {
+                last_action_tick: Some(1),
+                phase: resguard_policy::AutopilotPhase::Cooldown,
+                ..resguard_policy::AutopilotState::default()
+            },
+            tick: 4,
+            ..DaemonAutopilotState::default()
+        };
+        let out = daemon_autopilot_tick_with(
+            || Ok(low_snapshot()),
+            || Ok(Some(profile())),
+            |_reqs| Ok(AdaptiveApplyResult::default()),
+            |_plan| Ok(AdaptiveRevertResult::default()),
+            &mut state,
+        )
+        .expect("tick");
+        assert!(out
+            .warnings
+            .iter()
+            .any(|w| w.contains("no pending adaptive changes")));
+        assert!(out.reverted.is_empty());
     }
 }

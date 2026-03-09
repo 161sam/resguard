@@ -10,7 +10,10 @@ pub mod confidence;
 pub mod rules;
 pub mod thresholds;
 
-pub use autopilot::{decide_autopilot_actions, AutopilotAction, AutopilotDecision, AutopilotState};
+pub use autopilot::{
+    decide_autopilot_actions, AutopilotAction, AutopilotDecision, AutopilotPhase, AutopilotState,
+    AutopilotTransition,
+};
 pub use autoprofile::{build_auto_profile, AutoProfileSnapshot};
 pub use classification::{classify, ClassMatch, ClassificationInput};
 pub use confidence::{score, strong_identity_match, ConfidenceScore, ConfidenceSignals};

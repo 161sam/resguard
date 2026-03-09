@@ -105,7 +105,7 @@ fn render_snapshot_lines(snapshot: &TuiSnapshot, plain: bool, color_enabled: boo
     } else {
         for row in &snapshot.recent_actions {
             out.push(format!(
-                "tick={} decision={} cooldown={} actions={} applied={} warnings={}",
+                "tick={} decision={} cooldown={} actions={} applied={} reverted={} warnings={}",
                 row.tick
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "-".to_string()),
@@ -113,6 +113,7 @@ fn render_snapshot_lines(snapshot: &TuiSnapshot, plain: bool, color_enabled: boo
                 row.in_cooldown,
                 action_text(row),
                 row.applied.len(),
+                row.reverted.len(),
                 row.warnings.len()
             ));
         }
@@ -140,6 +141,7 @@ struct MonitorActionRow {
     decision: String,
     actions: Vec<String>,
     applied_count: usize,
+    reverted_count: usize,
     warning_count: usize,
     in_cooldown: bool,
 }
@@ -184,6 +186,7 @@ fn to_wire(snapshot: &TuiSnapshot) -> MonitorSnapshotWire {
                 decision: row.decision.clone(),
                 actions: row.actions.clone(),
                 applied_count: row.applied.len(),
+                reverted_count: row.reverted.len(),
                 warning_count: row.warnings.len(),
                 in_cooldown: row.in_cooldown,
             })
@@ -284,6 +287,7 @@ mod tests {
                 decision: "trigger".to_string(),
                 actions: vec!["reduce-heavy-cpuweight".to_string()],
                 applied: vec!["user:heavy:resguard-heavy.slice".to_string()],
+                reverted: Vec::new(),
                 warnings: Vec::new(),
                 in_cooldown: false,
             }],

@@ -39,10 +39,12 @@ struct LedgerRecord {
     timestamp: u64,
     tick: u64,
     decision: String,
+    transition: Option<String>,
     in_cooldown: bool,
     had_profile: bool,
     decision_actions: Vec<String>,
     applied: Vec<String>,
+    reverted: Vec<String>,
     skipped_noop: Vec<String>,
     warnings: Vec<String>,
 }
@@ -132,6 +134,13 @@ fn decision_for_tick(tick: &DaemonAutopilotTick) -> &'static str {
         "no-profile"
     } else if tick.in_cooldown {
         "cooldown"
+    } else if !tick.reverted.is_empty()
+        || tick
+            .decision_actions
+            .iter()
+            .any(|a| a == "revert-adaptive-limits")
+    {
+        "revert"
     } else if !tick.decision_actions.is_empty() || !tick.applied.is_empty() {
         "trigger"
     } else {
@@ -144,10 +153,12 @@ fn record_from_tick(tick_no: u64, out: DaemonAutopilotTick) -> LedgerRecord {
         timestamp: now_unix(),
         tick: tick_no,
         decision: decision_for_tick(&out).to_string(),
+        transition: out.transition,
         in_cooldown: out.in_cooldown,
         had_profile: out.had_profile,
         decision_actions: out.decision_actions,
         applied: out.applied,
+        reverted: out.reverted,
         skipped_noop: out.skipped_noop,
         warnings: out.warnings,
     }
@@ -167,10 +178,11 @@ where
         "INFO",
         "once_decision",
         &format!(
-            "decision={} actions={} applied={} cooldown={} profile={}",
+            "decision={} actions={} applied={} reverted={} cooldown={} profile={}",
             record.decision,
             record.decision_actions.len(),
             record.applied.len(),
+            record.reverted.len(),
             record.in_cooldown,
             record.had_profile,
         ),
@@ -226,11 +238,13 @@ fn main() -> Result<()> {
                     "INFO",
                     "tick",
                     &format!(
-                        "tick={} decision={} actions={} applied={} noop={} cooldown={} profile={}",
+                        "tick={} decision={} transition={} actions={} applied={} reverted={} noop={} cooldown={} profile={}",
                         record.tick,
                         record.decision,
+                        record.transition.as_deref().unwrap_or("-"),
                         record.decision_actions.len(),
                         record.applied.len(),
+                        record.reverted.len(),
                         record.skipped_noop.len(),
                         record.in_cooldown,
                         record.had_profile,
@@ -289,6 +303,15 @@ mod tests {
         }
     }
 
+    fn tick_revert() -> DaemonAutopilotTick {
+        DaemonAutopilotTick {
+            had_profile: true,
+            decision_actions: vec!["revert-adaptive-limits".to_string()],
+            reverted: vec!["user:heavy:resguard-heavy.slice".to_string()],
+            ..DaemonAutopilotTick::default()
+        }
+    }
+
     #[test]
     fn once_mode_trigger_path_returns_non_zero() {
         let logger = Logger::new(None);
@@ -321,6 +344,11 @@ mod tests {
     #[test]
     fn no_action_path_is_classified_as_idle() {
         assert_eq!(decision_for_tick(&tick_idle()), "idle");
+    }
+
+    #[test]
+    fn revert_path_is_classified_as_revert() {
+        assert_eq!(decision_for_tick(&tick_revert()), "revert");
     }
 
     #[test]

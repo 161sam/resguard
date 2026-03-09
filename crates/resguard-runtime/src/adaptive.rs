@@ -340,7 +340,7 @@ mod tests {
         assert_eq!(apply.applied.len(), 1);
         assert_eq!(apply.revert_plan.steps.len(), 1);
         assert_eq!(applied_calls.len(), 1);
-        assert_eq!(applied_calls[0].0, true);
+        assert!(applied_calls[0].0);
         assert_eq!(applied_calls[0].1, "resguard-heavy.slice");
         assert_eq!(applied_calls[0].4, Some(70));
 

@@ -1,4 +1,15 @@
 use anyhow::Result;
+use resguard_config::load_profile_from_store;
+use resguard_core::parse_size_to_bytes;
+use resguard_model::{MetricsSnapshot, Profile};
+use resguard_policy::{decide_autopilot_actions, AutopilotAction, AutopilotState};
+use resguard_runtime::{
+    apply_class_limit_changes, plan_class_limit_changes, read_system_snapshot, ClassLimitRequest,
+    SystemSnapshot,
+};
+use resguard_state::read_state;
+use std::path::Path;
+
 use resguard_runtime::{check_command_success, systemctl_service_action};
 
 pub fn daemon_enable() -> Result<i32> {
@@ -36,4 +47,383 @@ pub fn daemon_status() -> Result<i32> {
         println!("fix: sudo systemctl start resguardd.service");
     }
     Ok(if enabled && active { 0 } else { 1 })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DaemonAutopilotState {
+    pub tick: u64,
+    pub policy: AutopilotState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct DaemonAutopilotTick {
+    pub decision_actions: Vec<String>,
+    pub applied: Vec<String>,
+    pub skipped_noop: Vec<String>,
+    pub warnings: Vec<String>,
+    pub in_cooldown: bool,
+    pub had_profile: bool,
+}
+
+pub fn daemon_autopilot_tick(
+    config_dir: &str,
+    state_dir: &str,
+    state: &mut DaemonAutopilotState,
+) -> Result<DaemonAutopilotTick> {
+    daemon_autopilot_tick_with(
+        || Ok(read_system_snapshot()),
+        || load_active_profile(config_dir, state_dir),
+        |requests| {
+            let plan = plan_class_limit_changes(requests)?;
+            apply_class_limit_changes(&plan)
+        },
+        state,
+    )
+}
+
+fn snapshot_to_metrics(s: &SystemSnapshot) -> MetricsSnapshot {
+    MetricsSnapshot {
+        memory_pressure: s.memory_pressure,
+        cpu_pressure: s.cpu_pressure,
+        memory_current_bytes: None,
+        memory_available_bytes: s.mem_available_bytes,
+        cpu_usage_nsec: None,
+    }
+}
+
+fn load_active_profile(config_dir: &str, state_dir: &str) -> Result<Option<Profile>> {
+    let state_root = Path::new(state_dir);
+    let st = match read_state(state_root) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let Some(name) = st.active_profile else {
+        return Ok(None);
+    };
+    Ok(Some(load_profile_from_store(config_dir, &name)?))
+}
+
+fn class_slice(profile: &Profile, class: &str) -> Option<String> {
+    profile.spec.classes.get(class).map(|c| {
+        c.slice_name
+            .clone()
+            .unwrap_or_else(|| format!("resguard-{class}.slice"))
+    })
+}
+
+fn format_bytes_binary(bytes: u64) -> String {
+    let gb = 1024_u64.pow(3);
+    let mb = 1024_u64.pow(2);
+    if bytes >= gb {
+        format!("{}G", bytes / gb)
+    } else if bytes >= mb {
+        format!("{}M", bytes / mb)
+    } else {
+        bytes.to_string()
+    }
+}
+
+fn scaled_value(base: &str, pct: u8) -> Option<String> {
+    let b = parse_size_to_bytes(base).ok()?;
+    let scaled = b.saturating_mul(pct as u64) / 100;
+    Some(format_bytes_binary(scaled))
+}
+
+fn build_requests(
+    profile: &Profile,
+    actions: &[AutopilotAction],
+) -> (Vec<ClassLimitRequest>, Vec<String>) {
+    let mut reqs = Vec::new();
+    let mut warnings = Vec::new();
+    for action in actions {
+        match action {
+            AutopilotAction::ReduceBrowsersLimits {
+                memory_high_percent,
+                memory_max_percent,
+            } => {
+                let Some(slice) = class_slice(profile, "browsers") else {
+                    continue;
+                };
+                let class = profile.spec.classes.get("browsers");
+                let high = class
+                    .and_then(|c| c.memory_high.as_deref())
+                    .and_then(|v| scaled_value(v, *memory_high_percent));
+                let max = class
+                    .and_then(|c| c.memory_max.as_deref())
+                    .and_then(|v| scaled_value(v, *memory_max_percent));
+                if high.is_none() && max.is_none() {
+                    warnings.push(
+                        "browsers memory limits missing; skip adaptive memory reduction"
+                            .to_string(),
+                    );
+                    continue;
+                }
+                reqs.push(ClassLimitRequest {
+                    class: "browsers".to_string(),
+                    slice,
+                    user: true,
+                    memory_high: high,
+                    memory_max: max,
+                    cpu_weight: None,
+                });
+            }
+            AutopilotAction::ReduceHeavyCpuWeight { cpu_weight } => {
+                let Some(slice) = class_slice(profile, "heavy") else {
+                    continue;
+                };
+                reqs.push(ClassLimitRequest {
+                    class: "heavy".to_string(),
+                    slice,
+                    user: true,
+                    memory_high: None,
+                    memory_max: None,
+                    cpu_weight: Some(*cpu_weight),
+                });
+            }
+            AutopilotAction::PreserveRescueClass => {}
+        }
+    }
+    (reqs, warnings)
+}
+
+fn action_name(a: &AutopilotAction) -> String {
+    match a {
+        AutopilotAction::ReduceBrowsersLimits { .. } => "reduce-browsers-limits".to_string(),
+        AutopilotAction::ReduceHeavyCpuWeight { .. } => "reduce-heavy-cpuweight".to_string(),
+        AutopilotAction::PreserveRescueClass => "preserve-rescue-class".to_string(),
+    }
+}
+
+fn daemon_autopilot_tick_with<O, P, A>(
+    observe: O,
+    load_profile: P,
+    apply: A,
+    state: &mut DaemonAutopilotState,
+) -> Result<DaemonAutopilotTick>
+where
+    O: FnOnce() -> Result<SystemSnapshot>,
+    P: FnOnce() -> Result<Option<Profile>>,
+    A: FnOnce(&[ClassLimitRequest]) -> Result<resguard_runtime::AdaptiveApplyResult>,
+{
+    state.tick = state.tick.saturating_add(1);
+    let snap = observe()?;
+    let metrics = snapshot_to_metrics(&snap);
+    let profile = load_profile()?;
+
+    let Some(profile) = profile else {
+        return Ok(DaemonAutopilotTick {
+            warnings: vec!["no active profile; daemon autopilot idle".to_string()],
+            had_profile: false,
+            ..DaemonAutopilotTick::default()
+        });
+    };
+
+    let decision = decide_autopilot_actions(&metrics, &state.policy, &profile, state.tick);
+    state.policy = decision.next_state;
+    let mut out = DaemonAutopilotTick {
+        decision_actions: decision.actions.iter().map(action_name).collect(),
+        in_cooldown: decision.in_cooldown,
+        had_profile: true,
+        ..DaemonAutopilotTick::default()
+    };
+
+    if decision.actions.is_empty() {
+        return Ok(out);
+    }
+
+    let (requests, mut warnings) = build_requests(&profile, &decision.actions);
+    if requests.is_empty() {
+        out.warnings.append(&mut warnings);
+        return Ok(out);
+    }
+
+    let apply_out = apply(&requests)?;
+    out.applied = apply_out.applied;
+    out.skipped_noop = apply_out.skipped_noop;
+    out.warnings.append(&mut warnings);
+    out.warnings.extend(apply_out.warnings);
+    Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{daemon_autopilot_tick_with, DaemonAutopilotState};
+    use resguard_model::{
+        ClassSpec, Metadata, PressureSnapshot, Profile, Spec, SystemMemory, UserMemory,
+    };
+    use resguard_runtime::{AdaptiveApplyResult, ClassLimitRequest, SystemSnapshot};
+    use std::collections::BTreeMap;
+
+    fn profile() -> Profile {
+        let mut classes = BTreeMap::new();
+        classes.insert(
+            "browsers".to_string(),
+            ClassSpec {
+                slice_name: Some("resguard-browsers.slice".to_string()),
+                memory_high: Some("4G".to_string()),
+                memory_max: Some("6G".to_string()),
+                cpu_weight: Some(80),
+                oomd_memory_pressure: None,
+                oomd_memory_pressure_limit: None,
+            },
+        );
+        classes.insert(
+            "heavy".to_string(),
+            ClassSpec {
+                slice_name: Some("resguard-heavy.slice".to_string()),
+                memory_high: Some("6G".to_string()),
+                memory_max: Some("8G".to_string()),
+                cpu_weight: Some(90),
+                oomd_memory_pressure: None,
+                oomd_memory_pressure_limit: None,
+            },
+        );
+        classes.insert(
+            "rescue".to_string(),
+            ClassSpec {
+                slice_name: Some("resguard-rescue.slice".to_string()),
+                memory_high: Some("1G".to_string()),
+                memory_max: Some("1G".to_string()),
+                cpu_weight: Some(100),
+                oomd_memory_pressure: None,
+                oomd_memory_pressure_limit: None,
+            },
+        );
+        Profile {
+            api_version: "resguard.io/v1".to_string(),
+            kind: "Profile".to_string(),
+            metadata: Metadata {
+                name: "auto".to_string(),
+            },
+            spec: Spec {
+                memory: Some(resguard_model::Memory {
+                    system: Some(SystemMemory {
+                        memory_low: Some("2G".to_string()),
+                    }),
+                    user: Some(UserMemory {
+                        memory_high: Some("10G".to_string()),
+                        memory_max: Some("12G".to_string()),
+                    }),
+                }),
+                cpu: None,
+                oomd: None,
+                classes,
+                slices: None,
+                suggest: None,
+            },
+        }
+    }
+
+    fn low_snapshot() -> SystemSnapshot {
+        SystemSnapshot {
+            memory_pressure: Some(PressureSnapshot {
+                avg10: 1.0,
+                avg60: 1.0,
+            }),
+            cpu_pressure: Some(PressureSnapshot {
+                avg10: 1.0,
+                avg60: 1.0,
+            }),
+            ..SystemSnapshot::default()
+        }
+    }
+
+    fn high_snapshot() -> SystemSnapshot {
+        SystemSnapshot {
+            memory_pressure: Some(PressureSnapshot {
+                avg10: 20.0,
+                avg60: 35.0,
+            }),
+            cpu_pressure: Some(PressureSnapshot {
+                avg10: 20.0,
+                avg60: 40.0,
+            }),
+            ..SystemSnapshot::default()
+        }
+    }
+
+    #[test]
+    fn once_mode_path_triggers_actions_on_high_pressure() {
+        let mut state = DaemonAutopilotState::default();
+        let mut seen = Vec::<ClassLimitRequest>::new();
+        let out = daemon_autopilot_tick_with(
+            || Ok(high_snapshot()),
+            || Ok(Some(profile())),
+            |reqs| {
+                seen = reqs.to_vec();
+                Ok(AdaptiveApplyResult {
+                    applied: vec!["user:heavy:resguard-heavy.slice".to_string()],
+                    skipped_noop: Vec::new(),
+                    warnings: Vec::new(),
+                    revert_plan: resguard_runtime::AdaptiveRevertPlan::default(),
+                })
+            },
+            &mut state,
+        )
+        .expect("tick");
+
+        assert!(out.had_profile);
+        assert!(!out.decision_actions.is_empty());
+        assert!(!seen.is_empty());
+        assert!(!out.applied.is_empty());
+    }
+
+    #[test]
+    fn no_action_path_below_threshold() {
+        let mut state = DaemonAutopilotState::default();
+        let out = daemon_autopilot_tick_with(
+            || Ok(low_snapshot()),
+            || Ok(Some(profile())),
+            |_reqs| Ok(AdaptiveApplyResult::default()),
+            &mut state,
+        )
+        .expect("tick");
+
+        assert!(out.had_profile);
+        assert!(out.decision_actions.is_empty());
+        assert!(out.applied.is_empty());
+    }
+
+    #[test]
+    fn cooldown_behavior_is_enforced() {
+        let mut state = DaemonAutopilotState::default();
+        let first = daemon_autopilot_tick_with(
+            || Ok(high_snapshot()),
+            || Ok(Some(profile())),
+            |_reqs| {
+                Ok(AdaptiveApplyResult {
+                    applied: vec!["x".to_string()],
+                    ..AdaptiveApplyResult::default()
+                })
+            },
+            &mut state,
+        )
+        .expect("first");
+        assert!(!first.decision_actions.is_empty());
+
+        let second = daemon_autopilot_tick_with(
+            || Ok(high_snapshot()),
+            || Ok(Some(profile())),
+            |_reqs| Ok(AdaptiveApplyResult::default()),
+            &mut state,
+        )
+        .expect("second");
+        assert!(second.decision_actions.is_empty());
+        assert!(second.in_cooldown);
+    }
+
+    #[test]
+    fn no_profile_is_safe_noop() {
+        let mut state = DaemonAutopilotState::default();
+        let out = daemon_autopilot_tick_with(
+            || Ok(high_snapshot()),
+            || Ok(None),
+            |_reqs| Ok(AdaptiveApplyResult::default()),
+            &mut state,
+        )
+        .expect("tick");
+        assert!(!out.had_profile);
+        assert!(out.decision_actions.is_empty());
+        assert!(out.applied.is_empty());
+    }
 }

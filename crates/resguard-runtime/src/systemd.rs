@@ -212,18 +212,6 @@ pub fn systemctl_set_slice_limits(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::systemctl_set_slice_limits;
-
-    #[test]
-    fn set_slice_limits_requires_at_least_one_property() {
-        let err = systemctl_set_slice_limits(false, "user.slice", None, None, None)
-            .expect_err("no properties should fail");
-        assert!(err.to_string().contains("without any properties"));
-    }
-}
-
 pub fn resolve_user_runtime_dir(user: &str) -> Option<String> {
     let loginctl_output = Command::new("loginctl")
         .arg("show-user")
@@ -254,4 +242,16 @@ pub fn resolve_user_runtime_dir(user: &str) -> Option<String> {
         return None;
     }
     Some(format!("/run/user/{uid}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::systemctl_set_slice_limits;
+
+    #[test]
+    fn set_slice_limits_requires_at_least_one_property() {
+        let err = systemctl_set_slice_limits(false, "user.slice", None, None, None)
+            .expect_err("no properties should fail");
+        assert!(err.to_string().contains("without any properties"));
+    }
 }

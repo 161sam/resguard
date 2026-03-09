@@ -113,6 +113,11 @@ pub enum Commands {
         profile: Option<String>,
         #[arg(long)]
         apply: bool,
+        #[arg(
+            long,
+            help = "Safe zero-config automation for strong desktop matches only"
+        )]
+        auto: bool,
         #[arg(long)]
         dry_run: bool,
         #[arg(long, default_value_t = 70)]
@@ -274,6 +279,7 @@ pub struct SuggestRequest {
     pub state_dir: String,
     pub profile: Option<String>,
     pub apply: bool,
+    pub auto: bool,
     pub dry_run: bool,
     pub confidence_threshold: u8,
 }

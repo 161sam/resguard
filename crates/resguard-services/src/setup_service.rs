@@ -81,6 +81,7 @@ where
     println!("rollback_hint=resguard rollback --last");
     println!("user_reload_hint=systemctl --user daemon-reload");
     println!("followup=review preview: resguard suggest --dry-run");
+    println!("followup=safe auto for strong matches: resguard suggest --auto");
     println!("followup=apply strong matches: resguard suggest --apply");
     println!("followup=manual wrap fallback: resguard desktop list --filter <app> && resguard desktop wrap <desktop_id> --class <class>");
     Ok(if apply { apply_code } else { 0 })

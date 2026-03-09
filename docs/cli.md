@@ -121,6 +121,41 @@ Ausgabe enthält:
 
 ---
 
+## `resguard suggest`
+Syntax:
+
+- `resguard suggest [--profile <name>] [--confidence-threshold <0..100>]`
+- `resguard suggest --dry-run`
+- `resguard suggest --apply`
+- `resguard suggest --auto`
+
+Modi:
+
+- `--dry-run`: zeigt nur Plan (keine Writes)
+- `--apply`: versucht Wrap für threshold-passende, eindeutig gemappte Desktop-IDs
+- `--auto`: sichere Zero-Config-Automation
+  - nur starke Confidence
+  - nur eindeutige Desktop-ID
+  - mehrdeutige/schwache Treffer werden übersprungen
+  - `heavy`-Workloads bleiben manuell (kein aggressives Desktop-Autowrap)
+
+`--auto` Output:
+
+- `auto-ok` für erfolgreich angewandte Wraps
+- `skip` mit Grund (low confidence, ambiguity, heavy/manual)
+- `hint` mit manuellen Follow-up Commands für unresolved Apps
+- Summary:
+  - `auto.applied=<n>`
+  - `auto.skipped=<n>`
+  - `auto.manual_followup=<n>`
+  - `auto.failures=<n>`
+
+Sicherheit:
+
+- `--auto` kann nicht mit `--apply` oder `--dry-run` kombiniert werden.
+
+---
+
 ## `resguard apply <profile>`
 Flags:
 

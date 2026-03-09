@@ -9,7 +9,7 @@ Implementiert:
 - Profilschema + Validation
 - `init`, `apply`, `rollback`, `run`, `status`
 - `top` für klassenorientierte Live-Sicht (Memory/Limits/Scopes)
-- `suggest` mit confidence-threshold und optionalem `--apply`
+- `suggest` mit confidence-threshold, `--apply` und sicherem `--auto`
 - `desktop list`, `desktop wrap`, `desktop unwrap`, `desktop doctor`
 - optionales `resguardd` mit services-basierter Autopilot-Ausführung (`observe -> decide -> act`)
 - feature-gated TUI Operator-View (`--features tui`)
@@ -110,6 +110,7 @@ systemctl cat resguardd.service
 resguard doctor
 sudo resguard setup
 resguard suggest
+resguard suggest --auto
 ```
 
 `resguard setup` ist der Zero-Config-Entrypoint:

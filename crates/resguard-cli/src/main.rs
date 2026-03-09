@@ -146,6 +146,7 @@ fn main() {
             CliCommands::Suggest {
                 profile,
                 apply,
+                auto,
                 dry_run,
                 confidence_threshold,
             } => commands::suggest::run(crate::cli::SuggestRequest {
@@ -155,6 +156,7 @@ fn main() {
                 state_dir: cli.state_dir.clone(),
                 profile,
                 apply,
+                auto,
                 dry_run,
                 confidence_threshold,
             }),

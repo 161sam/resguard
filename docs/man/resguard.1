@@ -67,6 +67,12 @@ slice/class, current memory, configured/live limits, CPU weight,
 and notable active scopes.
 
 .TP
+.B suggest [--profile <name>] [--confidence-threshold <n>] [--dry-run|--apply|--auto]
+Suggest class mappings from observed scopes.
+Safe auto mode (\fB--auto\fR) applies only strong-confidence,
+unique desktop-ID matches and skips ambiguous or non-desktop-heavy cases.
+
+.TP
 .B version
 Print CLI version information.
 Matches
@@ -164,6 +170,8 @@ Disable colorized output.
 .nf
 resguard init --dry-run
 resguard setup
+resguard suggest --dry-run
+resguard suggest --auto
 resguard init --name demo --out /etc/resguard/profiles/demo.yml --root /tmp/rg
 resguard apply demo --dry-run --root /tmp/rg
 resguard apply demo --root /tmp/rg

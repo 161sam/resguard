@@ -58,6 +58,7 @@ pub(crate) fn handle_setup(
                 state_dir: state_dir.to_string(),
                 profile: Some(profile_name.to_string()),
                 apply: false,
+                auto: false,
                 dry_run: true,
                 confidence_threshold: 70,
             };
@@ -65,6 +66,7 @@ pub(crate) fn handle_setup(
                 &resguard_services::suggest_service::SuggestRequest {
                     format: req.format.clone(),
                     apply: req.apply,
+                    auto: req.auto,
                     dry_run: req.dry_run,
                     confidence_threshold: req.confidence_threshold,
                 },

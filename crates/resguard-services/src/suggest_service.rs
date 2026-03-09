@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, HashMap};
 pub struct SuggestRequest {
     pub format: String,
     pub apply: bool,
+    pub auto: bool,
     pub dry_run: bool,
     pub confidence_threshold: u8,
 }
@@ -73,6 +74,11 @@ where
     RP: FnOnce() -> Result<(Option<String>, Option<Profile>)>,
     WD: FnMut(&str, &str, bool) -> Result<()>,
 {
+    if req.auto && (req.apply || req.dry_run) {
+        return Err(anyhow!(
+            "invalid arguments: --auto cannot be combined with --apply or --dry-run"
+        ));
+    }
     if req.apply && req.dry_run {
         return Err(anyhow!(
             "invalid arguments: --apply and --dry-run cannot be combined"
@@ -84,8 +90,8 @@ where
 
     println!("command=suggest");
     println!(
-        "apply={} dry_run={} confidence_threshold={}",
-        req.apply, req.dry_run, req.confidence_threshold
+        "apply={} auto={} dry_run={} confidence_threshold={}",
+        req.apply, req.auto, req.dry_run, req.confidence_threshold
     );
 
     let (resolved_profile_name, resolved_profile) = resolve_profile()?;
@@ -127,25 +133,40 @@ where
         _ => print_suggestions_table(&suggestions, req.confidence_threshold),
     }
 
-    if req.apply || req.dry_run {
+    if req.apply || req.auto || req.dry_run {
         let profile_hint = resolved_profile_name.as_deref().unwrap_or("<profile>");
         let plan = build_plan_items(&suggestions, req.confidence_threshold, profile_hint);
 
         println!();
-        if req.dry_run {
-            println!("dry_run_preview");
+        let mode = if req.dry_run {
+            PlanExecuteMode::DryRun
+        } else if req.auto {
+            PlanExecuteMode::Auto
         } else {
-            println!("apply_results");
+            PlanExecuteMode::Apply
+        };
+
+        match mode {
+            PlanExecuteMode::DryRun => println!("dry_run_preview"),
+            PlanExecuteMode::Apply => println!("apply_results"),
+            PlanExecuteMode::Auto => println!("auto_results"),
         }
 
-        execute_plan_items(&plan, req.dry_run, &mut wrap_desktop);
+        let summary = execute_plan_items(&plan, mode, &mut wrap_desktop);
+        if matches!(mode, PlanExecuteMode::Auto) {
+            println!("auto.applied={}", summary.applied);
+            println!("auto.skipped={}", summary.skipped);
+            println!("auto.manual_followup={}", summary.manual_followup);
+            println!("auto.failures={}", summary.failures);
+        }
     } else {
         println!();
         println!("next_steps");
         println!("1) review suggestions above");
-        println!("2) auto-wrap known desktop entries: resguard suggest --apply");
+        println!("2) safe auto mode for strong matches: resguard suggest --auto");
+        println!("3) auto-wrap known desktop entries: resguard suggest --apply");
         println!(
-            "3) apply profile so user slices exist: sudo resguard apply <profile> --user-daemon-reload"
+            "4) apply profile so user slices exist: sudo resguard apply <profile> --user-daemon-reload"
         );
     }
 
@@ -159,9 +180,9 @@ pub fn suggest_preview_summary<RP>(
 where
     RP: FnOnce() -> Result<(Option<String>, Option<Profile>)>,
 {
-    if req.apply {
+    if req.apply || req.auto {
         return Err(anyhow!(
-            "invalid setup preview request: apply must be false for preview summary"
+            "invalid setup preview request: apply/auto must be false for preview summary"
         ));
     }
     if let Err(msg) = validate_confidence_threshold(req.confidence_threshold) {
@@ -382,10 +403,30 @@ fn build_plan_items(
     out
 }
 
-fn execute_plan_items<WD>(items: &[SuggestPlanItem], dry_run: bool, wrap_desktop: &mut WD)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PlanExecuteMode {
+    DryRun,
+    Apply,
+    Auto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct PlanExecutionSummary {
+    applied: usize,
+    skipped: usize,
+    manual_followup: usize,
+    failures: usize,
+}
+
+fn execute_plan_items<WD>(
+    items: &[SuggestPlanItem],
+    mode: PlanExecuteMode,
+    wrap_desktop: &mut WD,
+) -> PlanExecutionSummary
 where
     WD: FnMut(&str, &str, bool) -> Result<()>,
 {
+    let mut summary = PlanExecutionSummary::default();
     for item in items {
         match item {
             SuggestPlanItem::SkipLowConfidence {
@@ -394,25 +435,49 @@ where
                 confidence,
                 threshold,
                 confidence_reason,
-            } => println!(
-                "skip\t{scope}\t{class}\tconfidence {confidence} below threshold {threshold} ({confidence_reason})"
-            ),
+            } => {
+                println!(
+                    "skip\t{scope}\t{class}\tconfidence {confidence} below threshold {threshold} ({confidence_reason})"
+                );
+                summary.skipped += 1;
+                summary.manual_followup += 1;
+            }
             SuggestPlanItem::WrapDesktop {
                 desktop_id,
                 class,
                 confidence,
                 confidence_reason,
             } => {
-                if dry_run {
+                if matches!(mode, PlanExecuteMode::Auto) && class == "heavy" {
+                    println!(
+                        "skip\t{desktop_id}\t{class}\tauto mode keeps heavy class manual; run explicitly: resguard run --class heavy <cmd>"
+                    );
+                    summary.skipped += 1;
+                    summary.manual_followup += 1;
+                } else if matches!(mode, PlanExecuteMode::DryRun) {
                     println!(
                         "would-wrap\t{desktop_id}\t{class}\tconfidence={confidence}\treason={confidence_reason}\tauto-wrap=yes"
                     );
+                    summary.manual_followup += 1;
                 } else {
                     match wrap_desktop(desktop_id, class, false) {
-                        Ok(()) => println!(
-                            "ok\t{desktop_id}\t{class}\twrapped\tconfidence={confidence}\treason={confidence_reason}"
-                        ),
-                        Err(err) => println!("warn\t{desktop_id}\t{class}\t{err}"),
+                        Ok(()) => {
+                            if matches!(mode, PlanExecuteMode::Auto) {
+                                println!(
+                                    "auto-ok\t{desktop_id}\t{class}\twrapped\tconfidence={confidence}\treason={confidence_reason}"
+                                );
+                            } else {
+                                println!(
+                                    "ok\t{desktop_id}\t{class}\twrapped\tconfidence={confidence}\treason={confidence_reason}"
+                                );
+                            }
+                            summary.applied += 1;
+                        }
+                        Err(err) => {
+                            println!("warn\t{desktop_id}\t{class}\t{err}");
+                            summary.failures += 1;
+                            summary.manual_followup += 1;
+                        }
                     }
                 }
             }
@@ -423,11 +488,24 @@ where
                 confidence_reason,
                 filter_hint,
                 profile_hint,
-            } => println!(
-                "hint\t{scope}\t{class}\tno unique desktop_id match (confidence={confidence} {confidence_reason}); auto-wrap=no; wrap manually: resguard desktop list --filter '{filter_hint}' && resguard desktop wrap <desktop_id> --class {class} (then sudo resguard apply {profile_hint} --user-daemon-reload)"
-            ),
+            } => {
+                if matches!(mode, PlanExecuteMode::Auto) && class == "heavy" {
+                    println!(
+                        "skip\t{scope}\t{class}\tdesktop integration not appropriate for heavy workloads; use run: resguard run --class heavy <cmd>"
+                    );
+                    summary.skipped += 1;
+                    summary.manual_followup += 1;
+                } else {
+                    println!(
+                        "hint\t{scope}\t{class}\tno unique desktop_id match (confidence={confidence} {confidence_reason}); auto-wrap=no; wrap manually: resguard desktop list --filter '{filter_hint}' && resguard desktop wrap <desktop_id> --class {class} (then sudo resguard apply {profile_hint} --user-daemon-reload)"
+                    );
+                    summary.skipped += 1;
+                    summary.manual_followup += 1;
+                }
+            }
         }
     }
+    summary
 }
 
 #[derive(Debug, Clone)]
@@ -507,7 +585,7 @@ fn print_suggestions_table(items: &[Suggestion], threshold: u8) {
 mod tests {
     use super::{
         build_plan_items, build_suggestions, execute_plan_items, summarize_plan_items,
-        ScopeObservation, SuggestPlanItem,
+        PlanExecuteMode, ScopeObservation, SuggestPlanItem,
     };
     use resguard_model::SuggestRule;
     use std::collections::HashMap;
@@ -588,10 +666,14 @@ mod tests {
         let plan = build_plan_items(&suggestions, 70, "ubuntu-desktop");
 
         let mut wrapped: Vec<(String, String)> = Vec::new();
-        execute_plan_items(&plan, false, &mut |desktop_id, class, _force| {
-            wrapped.push((desktop_id.to_string(), class.to_string()));
-            Ok(())
-        });
+        execute_plan_items(
+            &plan,
+            PlanExecuteMode::Apply,
+            &mut |desktop_id, class, _force| {
+                wrapped.push((desktop_id.to_string(), class.to_string()));
+                Ok(())
+            },
+        );
 
         assert_eq!(
             wrapped,
@@ -787,5 +869,118 @@ mod tests {
         assert_eq!(summary.low_confidence, 1);
         assert_eq!(summary.planned_wraps.len(), 1);
         assert_eq!(summary.manual_review_hints.len(), 2);
+    }
+
+    #[test]
+    fn auto_mode_wraps_firefox_and_chrome() {
+        let items = vec![
+            SuggestPlanItem::WrapDesktop {
+                desktop_id: "firefox.desktop".to_string(),
+                class: "browsers".to_string(),
+                confidence: 90,
+                confidence_reason: "strong".to_string(),
+            },
+            SuggestPlanItem::WrapDesktop {
+                desktop_id: "chromium.desktop".to_string(),
+                class: "browsers".to_string(),
+                confidence: 88,
+                confidence_reason: "strong".to_string(),
+            },
+        ];
+
+        let mut wrapped = Vec::new();
+        let summary = execute_plan_items(
+            &items,
+            PlanExecuteMode::Auto,
+            &mut |desktop_id, class, _| {
+                wrapped.push((desktop_id.to_string(), class.to_string()));
+                Ok(())
+            },
+        );
+
+        assert_eq!(summary.applied, 2);
+        assert_eq!(wrapped.len(), 2);
+    }
+
+    #[test]
+    fn auto_mode_wraps_code_ide_when_strong() {
+        let items = vec![SuggestPlanItem::WrapDesktop {
+            desktop_id: "code.desktop".to_string(),
+            class: "ide".to_string(),
+            confidence: 89,
+            confidence_reason: "strong".to_string(),
+        }];
+
+        let mut wrapped = Vec::new();
+        let summary = execute_plan_items(
+            &items,
+            PlanExecuteMode::Auto,
+            &mut |desktop_id, class, _| {
+                wrapped.push((desktop_id.to_string(), class.to_string()));
+                Ok(())
+            },
+        );
+
+        assert_eq!(summary.applied, 1);
+        assert_eq!(wrapped[0].1, "ide");
+    }
+
+    #[test]
+    fn auto_mode_skips_heavy_desktop_integration() {
+        let items = vec![
+            SuggestPlanItem::WrapDesktop {
+                desktop_id: "docker.desktop".to_string(),
+                class: "heavy".to_string(),
+                confidence: 85,
+                confidence_reason: "strong".to_string(),
+            },
+            SuggestPlanItem::ManualWrap {
+                scope: "app-podman.scope".to_string(),
+                class: "heavy".to_string(),
+                confidence: 82,
+                confidence_reason: "strong".to_string(),
+                filter_hint: "podman".to_string(),
+                profile_hint: "auto".to_string(),
+            },
+        ];
+        let summary = execute_plan_items(
+            &items,
+            PlanExecuteMode::Auto,
+            &mut |_desktop_id, _class, _| panic!("heavy should not auto-wrap"),
+        );
+
+        assert_eq!(summary.applied, 0);
+        assert_eq!(summary.skipped, 2);
+    }
+
+    #[test]
+    fn auto_mode_keeps_ambiguous_and_weak_matches_safe() {
+        let items = vec![
+            SuggestPlanItem::SkipLowConfidence {
+                scope: "app-random.scope".to_string(),
+                class: "browsers".to_string(),
+                confidence: 40,
+                threshold: 70,
+                confidence_reason: "weak".to_string(),
+            },
+            SuggestPlanItem::ManualWrap {
+                scope: "app-idea.scope".to_string(),
+                class: "ide".to_string(),
+                confidence: 80,
+                confidence_reason: "strong".to_string(),
+                filter_hint: "idea".to_string(),
+                profile_hint: "auto".to_string(),
+            },
+        ];
+
+        let summary = execute_plan_items(
+            &items,
+            PlanExecuteMode::Auto,
+            &mut |_desktop_id, _class, _| panic!("no wraps expected"),
+        );
+
+        assert_eq!(summary.applied, 0);
+        assert_eq!(summary.skipped, 2);
+        assert_eq!(summary.manual_followup, 2);
     }
 }

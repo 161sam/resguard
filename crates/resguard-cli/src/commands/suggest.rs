@@ -10,6 +10,7 @@ pub(crate) fn handle_suggest(req: SuggestRequest) -> Result<i32> {
         state_dir,
         profile,
         apply,
+        auto,
         dry_run,
         confidence_threshold,
     } = req;
@@ -18,6 +19,7 @@ pub(crate) fn handle_suggest(req: SuggestRequest) -> Result<i32> {
         ServiceSuggestRequest {
             format,
             apply,
+            auto,
             dry_run,
             confidence_threshold,
         },

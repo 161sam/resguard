@@ -166,6 +166,8 @@ pub(crate) enum Commands {
         #[arg(long)]
         apply: bool,
         #[arg(long)]
+        auto: bool,
+        #[arg(long)]
         dry_run: bool,
         #[arg(long, default_value_t = 70)]
         confidence_threshold: u8,
@@ -326,6 +328,7 @@ pub(crate) struct SuggestRequest {
     state_dir: String,
     profile: Option<String>,
     apply: bool,
+    auto: bool,
     dry_run: bool,
     confidence_threshold: u8,
 }
